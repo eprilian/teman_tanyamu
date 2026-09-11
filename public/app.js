@@ -121,6 +121,12 @@ const I18N = {
     wallpaper_upload: 'Upload Custom Image',
     wallpaper_reset: 'Reset to Default',
     wallpaper_set: (n) => 'Wallpaper: ' + n,
+    wp_default: 'Default',
+    wp_senja: 'Blue Dusk',
+    wp_hutan: 'Dark Forest',
+    wp_ungu: 'Night Purple',
+    wp_marun: 'Maroon',
+    wp_abu: 'Solid Gray',
     wallpaper_custom_ok: 'Custom wallpaper applied',
     wallpaper_reset_ok: 'Wallpaper reset to default',
     err_login: 'Wrong username or password',
@@ -235,6 +241,12 @@ const I18N = {
     wallpaper_upload: 'Unggah Gambar Custom',
     wallpaper_reset: 'Reset ke Default',
     wallpaper_set: (n) => 'Wallpaper: ' + n,
+    wp_default: 'Default',
+    wp_senja: 'Biru Senja',
+    wp_hutan: 'Hutan Gelap',
+    wp_ungu: 'Ungu Malam',
+    wp_marun: 'Marun',
+    wp_abu: 'Abu Solid',
     wallpaper_custom_ok: 'Wallpaper custom terpasang',
     wallpaper_reset_ok: 'Wallpaper direset ke default',
     err_login: 'Username atau password salah',
@@ -1046,7 +1058,13 @@ $('#btn-temp').addEventListener('click', () => {
 const SIDEBAR_KEY = 'sidebarMinimized';
 const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 function setSidebarMinimized(min) {
-  if (isMobile()) min = false; // mobile drawer never minimizes
+  if (isMobile()) {
+    // di mobile: minimize = tutup drawer (sidebar mobile selalu full)
+    $('#sidebar').classList.remove('minimized');
+    localStorage.setItem(SIDEBAR_KEY, '0');
+    if (min) closeMobileSidebar();
+    return;
+  }
   $('#sidebar').classList.toggle('minimized', min);
   localStorage.setItem(SIDEBAR_KEY, min ? '1' : '0');
 }
@@ -1237,12 +1255,12 @@ $('#form-add-user').addEventListener('submit', async (e) => {
 
 // ---------- settings akun ----------
 const WALLPAPER_PRESETS = [
-  { name: 'Default', value: null },
-  { name: 'Biru Senja', value: 'linear-gradient(180deg, #0c1524 0%, #09090b 100%)' },
-  { name: 'Hutan Gelap', value: 'linear-gradient(180deg, #0b1a12 0%, #09090b 100%)' },
-  { name: 'Ungu Malam', value: 'linear-gradient(180deg, #150d24 0%, #09090b 100%)' },
-  { name: 'Marun', value: 'linear-gradient(180deg, #240d10 0%, #09090b 100%)' },
-  { name: 'Abu Solid', value: '#101012' },
+  { key: 'wp_default', value: null },
+  { key: 'wp_senja', value: 'linear-gradient(180deg, #0c1524 0%, #09090b 100%)' },
+  { key: 'wp_hutan', value: 'linear-gradient(180deg, #0b1a12 0%, #09090b 100%)' },
+  { key: 'wp_ungu', value: 'linear-gradient(180deg, #150d24 0%, #09090b 100%)' },
+  { key: 'wp_marun', value: 'linear-gradient(180deg, #240d10 0%, #09090b 100%)' },
+  { key: 'wp_abu', value: '#101012' },
 ];
 
 $('#btn-settings').addEventListener('click', async () => {
@@ -1339,7 +1357,7 @@ function renderWallpaperPresets() {
   const current = box.dataset.current || '';
   box.innerHTML = WALLPAPER_PRESETS.map((p, i) => `
     <button class="wp-preset" data-wp="${i}" style="height:52px; border-radius:9px; border:1px solid var(--border); font-size:10.5px; color:var(--text-2); background:${p.value || 'var(--panel-2)'}; cursor:pointer; position:relative; overflow:hidden;">
-      <span style="position:relative; z-index:1; background:rgba(0,0,0,0.35); padding:2px 6px; border-radius:5px;">${p.name}</span>
+      <span style="position:relative; z-index:1; background:rgba(0,0,0,0.35); padding:2px 6px; border-radius:5px;">${esc(t(p.key))}</span>
       ${current === String(p.value) ? '<span style="position:absolute; top:4px; right:4px; width:8px; height:8px; border-radius:50%; background:var(--accent);"></span>' : ''}
     </button>`).join('');
 }
@@ -1348,15 +1366,16 @@ async function applyWallpaper() {
   const r = await fetch('/api/wallpaper');
   const data = await r.json();
   const msgArea = document.querySelector('.main');
+  const isImg = !!data.wallpaper && data.wallpaper.startsWith('data:image/');
+  msgArea.classList.toggle('has-wallpaper', !!data.wallpaper);
+  msgArea.classList.toggle('has-wallpaper-img', isImg); // overlay gelap hanya untuk gambar
   if (data.wallpaper) {
-    msgArea.classList.add('has-wallpaper');
-    if (data.wallpaper.startsWith('data:image/')) {
+    if (isImg) {
       msgArea.style.background = `url("${data.wallpaper}") center/cover no-repeat`;
     } else {
       msgArea.style.background = data.wallpaper;
     }
   } else {
-    msgArea.classList.remove('has-wallpaper');
     msgArea.style.background = '';
   }
   // mark active preset
@@ -1379,7 +1398,7 @@ $('#wallpaper-presets').addEventListener('click', async (e) => {
   });
   const data = await r.json();
   if (!r.ok) { toast(data.error, 'error'); return; }
-  toast(t('wallpaper_set', preset.name), 'success');
+  toast(t('wallpaper_set', t(preset.key)), 'success');
   await applyWallpaper();
 });
 

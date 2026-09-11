@@ -84,6 +84,8 @@ app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    } else if (/\.(css|js)$/.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache');
     }
   }
 }));

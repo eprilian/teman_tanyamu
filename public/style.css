@@ -238,16 +238,16 @@ input, textarea, select { font-family: inherit; }
 /* messages: centered column like Open WebUI */
 #messages { flex: 1; overflow-y: auto; }
 .msg-col { margin: 0 auto; padding: 24px 36px 10px; display: flex; flex-direction: column; gap: 22px; width: 100%; max-width: 860px; }
-.main.has-wallpaper::before {
+.main.has-wallpaper-img::before {
   content: ''; position: absolute; inset: 0; z-index: 0;
   background: rgba(9,9,11,0.78);
   pointer-events: none;
 }
-.main.has-wallpaper > * { position: relative; z-index: 1; }
-.main.has-wallpaper .chat-header { background: transparent; }
-.main.has-wallpaper .m-content { background: rgba(28,28,31,0.88); }
-.main.has-wallpaper .msg-block.user .m-content { background: rgba(38,50,74,0.88); }
-.main.has-wallpaper .composer { background: rgba(24,24,27,0.92); }
+.main.has-wallpaper-img > * { position: relative; z-index: 1; }
+.main.has-wallpaper-img .chat-header { background: transparent; }
+.main.has-wallpaper-img .m-content { background: rgba(28,28,31,0.88); }
+.main.has-wallpaper-img .msg-block.user .m-content { background: rgba(38,50,74,0.88); }
+.main.has-wallpaper-img .composer { background: rgba(24,24,27,0.92); }
 .msg-block { display: flex; gap: 13px; }
 .msg-block.user { flex-direction: row-reverse; }
 .m-avatar {
