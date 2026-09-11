@@ -292,7 +292,7 @@ app.put('/api/me/password', requireAuth, (req, res) => {
   if (!current || !next) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
   if (String(next).length < 4) return res.status(400).json({ error: 'ERR_PW_SHORT' });
   const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
-  if (row.password_hash !== hashPassword(current)) return res.status(401).json({ error: 'ERR_OLD_PW' });
+  if (!verifyPassword(current, row.password_hash)) return res.status(401).json({ error: 'ERR_OLD_PW' });
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(next), req.user.id);
   res.json({ ok: true });
 });
