@@ -1182,8 +1182,26 @@ $('#btn-logout').addEventListener('click', () => {
 $('#logout-cancel').addEventListener('click', () => $('#modal-logout').classList.remove('active'));
 $('#logout-ok').addEventListener('click', async () => {
   $('#modal-logout').classList.remove('active');
+  if (abortCtrl) abortCtrl.abort(); // stop stream berjalan
   await fetch('/api/logout', { method: 'POST' });
-  location.reload();
+  // reset state SPA tanpa reload
+  currentUser = null;
+  currentChatId = null;
+  chats = [];
+  allModelsCache = [];
+  $('#app-view').classList.remove('ready', 'active');
+  $('#btn-admin').classList.remove('show');
+  $('#login-view').style.display = '';
+  $('#login-view').classList.add('ready');
+  $('#login-user').value = '';
+  $('#login-pass').value = '';
+  $('#login-error').textContent = '';
+  $('#model-select').innerHTML = '';
+  $('#chat-list').innerHTML = '';
+  $('#chat-search').value = '';
+  $('#messages').innerHTML = '';
+  $('#modal-admin').classList.remove('active');
+  $('#login-user').focus();
 });
 
 async function enterApp() {
@@ -1231,6 +1249,7 @@ async function loadModels() {
     if (!r.ok) throw new Error('fetch failed');
     const models = await r.json();
     const sel = $('#model-select');
+    sel.disabled = false; // re-enable (mis. setelah logout dari akun non-admin)
     sel.innerHTML = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
     // priority: user override (from /api/me) > saved local > global default (server order in list)
     const preferred = currentUser && currentUser.effective_model;
