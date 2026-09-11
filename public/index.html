@@ -111,6 +111,7 @@ input, textarea, select { font-family: inherit; }
 .sidebar.minimized .chat-item .del,
 .sidebar.minimized .user-row .uinfo,
 .sidebar.minimized .btn-new-chat span.txt { display: none !important; }
+.sidebar.minimized #chat-search { display: none; }
 .sidebar.minimized #btn-minimize { display: none; }
 .sidebar.minimized .btn-new-chat { justify-content: center; align-items: center; padding: 0; margin: 0 auto 6px; width: 44px; height: 44px; }
 .sidebar.minimized .btn-new-chat .plus { font-size: 22px; margin: 0; }
@@ -125,6 +126,13 @@ input, textarea, select { font-family: inherit; }
 .sidebar.minimized .side-bottom { padding: 10px 8px; border-top: 1px solid var(--border); }
 } /* end desktop-only minimized */
 .side-top { padding: 14px 14px 8px; }
+#chat-search {
+  width: 100%; margin: 0 0 10px; background: var(--bg);
+  border: 1px solid var(--border-strong); color: var(--text);
+  padding: 8px 12px; border-radius: 10px; font-size: 13px; outline: none;
+  transition: border-color 120ms;
+}
+#chat-search:focus { border-color: var(--accent); }
 .side-logo { display: flex; align-items: center; gap: 10px; padding: 4px 6px 12px; }
 .side-logo .mark {
   width: 30px; height: 30px; border-radius: 8px; background: var(--accent);
@@ -488,6 +496,7 @@ input, textarea, select { font-family: inherit; }
       <button class="btn-new-chat" id="btn-new-chat" title="New Chat">
         <span class="plus">+</span><span class="txt">&nbsp;New Chat</span>
       </button>
+      <input id="chat-search" type="search" autocomplete="off" placeholder="Search chats...">
       <div class="side-section" id="side-history-label">Chat History</div>
     </div>
     <nav id="chat-list" aria-label="Daftar chat"></nav>
@@ -524,7 +533,6 @@ input, textarea, select { font-family: inherit; }
         <span class="model-label" id="model-label">Model:</span>
         <select id="model-select" data-aria="model"></select>
       </div>
-      <input id="chat-search" type="search" autocomplete="off" placeholder="Search chats..." style="flex:1; max-width:300px; margin-left:12px; background:var(--bg); border:1px solid var(--border-strong); color:var(--text); padding:8px 12px; border-radius:10px; font-size:13px; outline:none;">
       <button class="temp-btn" id="btn-temp" title="Temporary Chat" aria-label="Temporary chat">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
         <span id="temp-label" class="temp-label-text">Temp</span>
