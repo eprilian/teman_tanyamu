@@ -74,6 +74,12 @@ if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
 const app = express();
 app.set('trust proxy', true); // behind Cloudflare Tunnel / reverse proxy
 app.use(express.json({ limit: '2mb' }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) {

@@ -8,7 +8,7 @@
 | **Stack** | Node.js + Express 5 + better-sqlite3 + vanilla JS |
 | **AI Backend** | 9Router (`http://localhost:20128/v1`, OpenAI-compatible) |
 | **Providers** | AG, Groq, BAI, OpenRouter, Nvidia, Cline — 497+ models |
-| **Frontend** | Single `index.html`, zero framework, dark theme |
+| **Frontend** | `index.html` + `style.css` + `app.js`, zero framework, dark theme |
 | **Language** | English (default) / Indonesian — runtime toggle |
 | **License** | Private / personal use |
 
@@ -87,7 +87,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        CLIENT (Browser)                         │
-│   Desktop / Mobile · single index.html · zero framework         │
+│   Desktop / Mobile · split frontend (html/css/js) · zero framework         │
 └───────────────┬─────────────────────────────────────────────────┘
                 │ fetch (cookie session)
                 ▼
@@ -283,7 +283,9 @@ PORT=8080 ROUTER_BASE=http://192.168.1.10:20128/v1 node server.js
 | Path | Description |
 |---|---|
 | `chat.db` | SQLite database (WAL mode) |
-| `public/index.html` | Frontend (single file) |
+| `public/index.html` | Struktur halaman SPA (login + app shell) |
+| `public/style.css` | Seluruh styling frontend |
+| `public/app.js` | Seluruh logika frontend |
 | `server.js` | Backend (single file) |
 | `.port` | Persisted port number (created by `manage.sh port`) |
 | `~/.config/systemd/user/dash-ai-me.service` | systemd unit |
