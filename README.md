@@ -42,6 +42,7 @@
 | Multi-session history | Per-user isolation in SQLite |
 | Chat memory | Last 10 messages used as AI context |
 | Rename / Delete chats | Via sidebar hover buttons |
+| **Chat search** | Instant client-side filter by title (sidebar) |
 | Markdown + code blocks | With streaming auto-close fence fix |
 | Copy & Retry | Per-message actions |
 | Stop generation | Abort mid-stream |
@@ -52,7 +53,8 @@
 
 | Feature | Description |
 |---|---|
-| Login | scrypt-hashed passwords, HttpOnly session cookie (7 days) |
+| Login | scrypt per-user salt (`scrypt1:salt:hash`), timing-safe compare; legacy static-salt hashes auto-upgrade on login |
+| Session purge | Expired sessions deleted on every login |
 | Roles | `admin` (full control) and `user` (chat only) |
 | Daily quota | Per-user limit (default 50/day), admin unlimited |
 | User management | Admin: add / delete / reset password / activate / deactivate |
@@ -74,9 +76,9 @@
 | Feature | Description |
 |---|---|
 | Dark theme | Open WebUI inspired palette |
-| Chat wallpaper | 6 presets + custom image upload (per-user, optional global) |
-| Custom avatar | Auto-downscaled upload |
-| Sidebar minimize | Collapses to icon rail, state persisted |
+| Chat wallpaper | 6 presets + custom image upload (per-user, optional global); dark overlay only for image wallpapers, gradient presets render as-is |
+| Custom avatar | Auto-downscaled upload, strict base64 validation |
+| Sidebar minimize | Desktop: icon rail, state persisted · Mobile: closes the drawer |
 | Bilingual UI | English / Indonesian, all strings translated |
 | Responsive | Mobile drawer sidebar, 44px+ tap targets |
 
@@ -133,7 +135,8 @@
 | Server-side API key proxy | Key never reaches the browser |
 | SSE relay (not direct) | Streaming works cross-device, CORS-free |
 | Error codes (`ERR_*`) | Translated client-side per language |
-| no-cache for HTML | UI updates apply on refresh |
+| no-cache delivery | HTML: no-store · CSS/JS: no-cache (updates always fresh) |
+| Split frontend (`style.css` + `app.js`) | Cacheable assets, lintable JS, CSP-ready |
 
 ---
 
@@ -294,7 +297,7 @@ PORT=8080 ROUTER_BASE=http://192.168.1.10:20128/v1 node server.js
 
 ## API Reference
 
-All endpoints require the session cookie except `/api/login`.
+All endpoints require the session cookie except `/api/login` and `/api/health`.
 Errors return `{"error": "ERR_*"}` codes, translated client-side.
 
 ### Auth
@@ -304,6 +307,7 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | POST | `/api/login` | `{username, password}` | Sign in |
 | POST | `/api/logout` | - | Destroy session |
 | GET | `/api/me` | - | User info + quota + effective model |
+| GET | `/api/health` | - | Liveness + DB check (no auth, for uptime monitors) |
 
 ### Account
 
@@ -361,7 +365,7 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | `ERR_PW_SHORT` | Password under 4 chars |
 | `ERR_OLD_PW` | Old password wrong |
 | `ERR_QUOTA` | Daily quota exceeded |
-| `ERR_RATE_LIMITED` | Too many login attempts (5 per 15 min) |
+| `ERR_RATE_LIMITED` | Too many failed logins: 5 attempts, then 2-minute IP block |
 | `ERR_NOT_FOUND` | Resource not found |
 | `ERR_USERNAME_TAKEN` | Username exists |
 | `ERR_TOO_BIG` | Image too large |
@@ -378,7 +382,9 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 ```sql
 users     (id, username, password_hash, role, daily_quota,
            model_override, avatar, active, created_at)
-sessions  (token, user_id, expires_at)             -- token indexed PK
+          -- password_hash: "scrypt1:<salt>:<hash>" (per-user salt);
+          -- legacy static-salt hex auto-upgrades on next login
+sessions  (token, user_id, expires_at)             -- expired rows purged on login
 chats     (id, user_id, title, model,
            created_at, updated_at)
 messages  (id, chat_id, role, content, tokens, created_at)
@@ -397,6 +403,11 @@ Server binds to all interfaces. From phones / LAN devices:
 http://<laptop-ip>:3000        e.g. http://20.20.100.6:3000
 ```
 
+For access over the internet, a Cloudflare Tunnel works out of the box:
+`trust proxy` is enabled and `cf-connecting-ip` is honored for login
+rate limiting; the session cookie gets the `Secure` flag automatically
+when the request arrives via HTTPS.
+
 ---
 
 ## Performance
@@ -413,17 +424,24 @@ http://<laptop-ip>:3000        e.g. http://20.20.100.6:3000
 
 ## Security Notes
 
-- Passwords: scrypt hash (never plaintext)
-- Sessions: HttpOnly cookie, SameSite=Lax, 7-day expiry
+- Passwords: scrypt with per-user random salt, stored as `scrypt1:<salt>:<hash>`,
+  verified with `crypto.timingSafeEqual`; legacy static-salt hashes upgrade
+  automatically on the next successful login
+- Sessions: HttpOnly cookie, SameSite=Lax, 7-day expiry; expired rows purged on login
 - **Secure cookie flag**: auto-enabled when behind HTTPS (Cloudflare Tunnel sets `X-Forwarded-Proto`)
-- **Login rate limiting**: max 5 failed attempts per IP per 15 minutes (`ERR_RATE_LIMITED`)
+- **Login rate limiting**: 5 failed attempts per IP, then a 2-minute block (`ERR_RATE_LIMITED`)
 - `trust proxy` enabled: client IP correctly detected behind Cloudflare (`CF-Connecting-IP`)
+- **Security headers** on every response: `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`
+- **XSS hardening**: avatar & wallpaper validated server-side against strict
+  formats (base64 image types / `linear-gradient(...)` / `#hex` only — no
+  `svg+xml`, no attribute breakout); all user-supplied values escaped at render
 - 9Router API key never sent to browser (server-side proxy only)
 - Per-user chat isolation enforced in every SQL query
 - Model policy enforced server-side (not just hidden in UI)
-- Quota checked before every AI call
+- Quota checked before every AI call; failed/aborted streams do not consume quota
 - Deactivate / password reset revokes all sessions instantly
-- HTML served with `Cache-Control: no-cache` (no stale UI)
+- Caching: HTML `no-store`, CSS/JS `no-cache` (updates always fresh)
 
 ---
 
@@ -435,5 +453,5 @@ http://<laptop-ip>:3000        e.g. http://20.20.100.6:3000
 | Forgot admin password | `./manage.sh password` |
 | Port already in use | `./manage.sh port 3001` |
 | Not auto-starting at boot | `./manage.sh enable-boot`, verify `loginctl show-user $USER \| grep Linger` |
-| Stale UI after update | Hard refresh: `Ctrl+Shift+R` (HTML is no-cache, older browsers may still cache) |
+| Stale UI after update | Hard refresh: `Ctrl+Shift+R` (HTML/CSS/JS are all no-cache; rarely needed) |
 | Full reset (nuclear) | `./manage.sh stop && rm -f chat.db* && ./manage.sh start` — all data gone |
