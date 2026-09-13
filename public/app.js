@@ -858,11 +858,17 @@ async function enterApp() {
   await applyWallpaper();
 }
 
+function effectiveChatModel() {
+  // what the next message will actually use: open chat's model > user override > global default
+  const sel = $('#model-select');
+  return (sel && sel.value) || currentUser.model_override || currentUser.effective_model || currentUser.global_model || '';
+}
 function updateModelBadge() {
   const el = $('#lbl-quota');
   if (!currentUser || !el) return;
   let chip = el.querySelector('.qmodel');
-  if (currentUser.model_override) {
+  const model = effectiveChatModel();
+  if (model) {
     if (!chip) {
       chip = document.createElement('span');
       chip.className = 'qmodel';
@@ -870,8 +876,8 @@ function updateModelBadge() {
       el.appendChild(chip);
     }
     chip.querySelector('.qk').textContent = t('quota_chip_model');
-    chip.querySelector('b').textContent = currentUser.model_override;
-    chip.querySelector('b').title = currentUser.model_override;
+    chip.querySelector('b').textContent = model;
+    chip.querySelector('b').title = model;
   } else if (chip) {
     chip.remove();
   }
@@ -1186,6 +1192,7 @@ document.addEventListener('scroll', () => closeModelCombo(), true);
 $('#model-select').addEventListener('change', async (e) => {
   const model = e.target.value;
   localStorage.setItem('model', model);
+  updateModelBadge();
   if (currentChatId) {
     await fetch(`/api/chats/${currentChatId}`, {
       method: 'PATCH',
@@ -1400,6 +1407,7 @@ async function openChat(id) {
   $('#model-select').value = chat.model;
   updateModelCombo($('#model-select'));
   localStorage.setItem('model', chat.model);
+  updateModelBadge();
   const row = chats.find(c => c.id === id);
   chatLean = !!(row && row.lean);
   applyLeanUI();
@@ -1417,20 +1425,19 @@ function renderMessages(messages) {
   box.scrollTop = box.scrollHeight;
 }
 
+const DEFAULT_USER_AVATAR = '/img/default-avatar.png';
+function userAvatarSrc(u) { return (u && u.avatar) ? u.avatar : DEFAULT_USER_AVATAR; }
+
 function renderSideAvatar() {
   const side = $('#avatar-init');
   if (!side || !currentUser) return;
-  if (currentUser.avatar) {
-    side.innerHTML = `<img src="${esc(currentUser.avatar)}" alt="">`;
-  } else {
-    side.textContent = currentUser.username.slice(0, 1).toUpperCase();
-  }
+  side.innerHTML = `<img src="${esc(userAvatarSrc(currentUser))}" alt="">`;
 }
 
 function messageHTML(role, content, streaming) {
   const isUser = role === 'user';
-  const initial = isUser ? (currentUser ? currentUser.username.slice(0,1).toUpperCase() : 'U') : 'AI';
-  const userAva = (isUser && currentUser && currentUser.avatar) ? `<img src="${esc(currentUser.avatar)}" alt="">` : initial;
+  const initial = 'AI';
+  const userAva = isUser ? `<img src="${esc(userAvatarSrc(currentUser))}" alt="">` : initial;
   const aiAvatar = (!isUser && currentUser && currentUser.assistant_avatar) ? `<img src="${esc(currentUser.assistant_avatar)}" alt="">` : initial;
   return `<div class="msg-block ${isUser ? 'user' : 'ai'}">
     <div class="m-avatar">${isUser ? userAva : aiAvatar}</div>
@@ -1967,9 +1974,7 @@ async function loadAdminUsers() {
     </tr></thead>
     <tbody>
     ${users.map(u => {
-    const avatarHTML = u.avatar
-      ? `<img src="${esc(u.avatar)}" alt="">`
-      : esc(u.username.slice(0,1).toUpperCase());
+    const avatarHTML = `<img src="${esc(userAvatarSrc(u))}" alt="">`;
     const opts = [`<option value="" ${!u.model_override ? 'selected' : ''}>${esc(t('admin_global_tag'))}</option>`]
       .concat(allModelsCache.map(m => `<option value="${esc(m)}" ${m === u.model_override ? 'selected' : ''}>${esc(m)}</option>`))
       .join('');
@@ -2067,6 +2072,7 @@ $('#global-model-save').addEventListener('click', async () => {
   const data = await r.json();
   if (!r.ok) { toast(terr(data.error), 'error'); return; }
   toast(t('model_changed', model), 'success');
+  try { const me = await (await fetch('/api/me')).json(); if (me.username) { currentUser = me; updateModelBadge(); } } catch (_) {}
 });
 
 $('#token-save').addEventListener('click', async () => {
@@ -2203,6 +2209,9 @@ $('#admin-users').addEventListener('change', async (e) => {
   const data = await r.json();
   if (!r.ok) { toast(data.error, 'error'); return; }
   toast(model ? `Override model user #${userId}: ${model}` : `User #${userId} kembali ke global default`, 'success');
+  if (currentUser && String(currentUser.id) === String(userId)) {
+    try { const me = await (await fetch('/api/me')).json(); if (me.username) { currentUser = me; updateModelBadge(); } } catch (_) {}
+  }
 });
 
 $('#admin-users').addEventListener('click', async (e) => {
@@ -2326,11 +2335,7 @@ $('#settings-close').addEventListener('click', () => $('#modal-settings').classL
 function renderSettingsAvatar() {
   const el = $('#settings-avatar-preview');
   if (el) {
-    if (currentUser.avatar) {
-      el.innerHTML = `<img src="${esc(currentUser.avatar)}" alt="">`;
-    } else {
-      el.textContent = currentUser.username.slice(0, 1).toUpperCase();
-    }
+    el.innerHTML = `<img src="${esc(userAvatarSrc(currentUser))}" alt="">`;
   }
   renderSideAvatar();
 }
