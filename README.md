@@ -72,7 +72,8 @@
 
 | Feature | Description |
 |---|---|
-| Auto-fetch | Model list pulled live from 9Router |
+| **Model Connection (gateway)** | Base URL + API key set in Admin Dashboard (Open WebUI style): masked key display, show/hide eye, Test button (live latency + model count), instant hot-reload, no restart |
+| Auto-fetch | Model list pulled live from 9Router (or any OpenAI-compatible endpoint) |
 | **Searchable picker** | Custom combobox with instant filter + keyboard nav (↑/↓/Enter/Esc), works for admin & locked users |
 | Global default | Admin setting, applies to all users |
 | Per-user override | Admin sets specific model per user |
@@ -282,15 +283,18 @@ All-in-one service manager (systemd user service):
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | Web server port |
-| `ROUTER_BASE` | `http://localhost:20128/v1` | 9Router API base URL |
-| `ROUTER_KEY` | `sk-a777...` | 9Router API key |
+| `ROUTER_BASE` | – | Boot fallback base URL (used only until set in Admin Dashboard) |
+| `ROUTER_KEY` | – | Boot fallback API key (same; DB settings take precedence) |
 | `ADMIN_PASSWORD` | `admin123` | Initial admin password (first run only) |
 
 Example:
 
 ```bash
-PORT=8080 ROUTER_BASE=http://192.168.1.10:20128/v1 node server.js
+PORT=8080 ROUTER_BASE=http://192.168.1.10:20128/v1 ROUTER_KEY=*** node server.js
 ```
+
+> Once set via **Admin Dashboard → Model Connection**, values in the `settings` table win
+> over env vars — you can change gateway/key anytime from the browser without restart.
 
 ### File Locations
 
@@ -376,6 +380,9 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | POST | `/api/admin/assistant-avatar` | `{avatar\|null}` | Global assistant (AI) avatar for all users |
 | GET | `/api/admin/settings` | - | Global settings + today's token totals (prompt/completion) |
 | PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, memory_enabled?, timeout_ms?}` | Update settings (budget 200–32000, reply cap 64–8192, timeout 30–600 s) |
+| GET | `/api/admin/router-config` | - | Model gateway base URL + masked key + source (`database`/`env`) |
+| PUT | `/api/admin/router-config` | `{base_url?, api_key?}` | Set gateway base URL & API key (hot-reload, no restart; empty key = keep) |
+| POST | `/api/admin/router-test` | `{base_url?, api_key?}` | Probe `GET {base}/models` with saved **or** posted (pre-save) creds → latency + model count |
 | PUT | `/api/admin/wallpaper` | `{wallpaper\|null}` | Set global wallpaper |
 
 ### Error Codes
@@ -403,6 +410,10 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | `ERR_BAD_MAXTOK` | Reply token cap out of range (64–8192) |
 | `ERR_BAD_TIMEOUT` | Upstream timeout out of range (30–600 s) |
 | `ERR_ROUTER_DOWN` | 9Router unreachable |
+| `ERR_ROUTER_NOT_CONFIGURED` | Base URL / API key not set yet (Admin Dashboard → Model Connection) |
+| `ERR_BASE_REQUIRED` | Base URL field empty |
+| `ERR_BASE_INVALID` | Base URL not a valid http(s) URL |
+| `ERR_BASE_BLOCKED_HOST` | Base URL host blocked (link-local / metadata addresses) |
 | `ERR_TIMEOUT` | Upstream model call timed out |
 
 ---
@@ -421,7 +432,7 @@ messages  (id, chat_id, role, content, tokens, created_at)
 usage     (user_id, date, request_count, tokens_used)  -- PK (user_id, date)
 memories  (id, user_id, content, source, updated_at)  -- cross-chat facts (max 20/user)
 settings  (key, value)
-          -- keys: default_model, wallpaper, assistant_avatar,
+          -- keys: default_model, wallpaper, assistant_avatar, router_base, router_key,
           --         user:<id>:wallpaper, history_token_budget, max_reply_tokens,
           --         memory_enabled, timeout_ms, memory_sync_chat, memory:last:<id>
 ```
@@ -482,7 +493,8 @@ when the request arrives via HTTPS.
 
 | Problem | Fix |
 |---|---|
-| "9Router offline" | Check: `curl http://localhost:20128/v1/models -H "Authorization: Bearer <key>"` |
+| "9Router offline" | Verify gateway: `curl http://localhost:20128/v1/models -H "Authorization: Bearer ***"` — or click **Test** in Admin Dashboard → Model Connection |
+| Moved gateway / new key | Admin Dashboard → Model Connection: set Base URL + API key, Test, Save. Applies instantly, no restart |
 | Forgot admin password | `./manage.sh password` |
 | Port already in use | `./manage.sh port 3001` |
 | Not auto-starting at boot | `./manage.sh enable-boot`, verify `loginctl show-user $USER \| grep Linger` |

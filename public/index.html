@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teman Tanyamu</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=1.0-beta.5">
 </head>
 <body>
 
@@ -40,7 +40,7 @@
       <div class="side-logo">
         <div class="mark"><img src="/logo.svg" alt="" style="width:100%; height:100%; border-radius:8px;"></div>
         <span class="name">Teman Tanyamu</span>
-        <span class="ver">v1.1</span>
+        <span class="ver">v1.0-beta</span>
         <button class="icon-btn" id="btn-minimize" title="Hide sidebar" aria-label="Hide sidebar" style="margin-left:auto; width:32px; height:32px;">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
         </button>
@@ -55,10 +55,11 @@
     <div class="side-bottom">
       <div class="user-row">
         <div class="avatar" id="avatar-init">?</div>
-        <div class="uinfo">
-          <div class="uname" id="lbl-user">-</div>
-          <div class="uquota" id="lbl-quota"></div>
-        </div>
+      <div class="uinfo">
+        <div class="uname" id="lbl-user">-</div>
+      </div>
+      <div class="uquota" id="lbl-quota"></div>
+      <div class="user-actions">
         <button class="icon-btn" id="btn-lang" title="Language / Bahasa">
           <span id="lang-label" style="font-size:11px; font-weight:600;">EN</span>
         </button>
@@ -83,8 +84,16 @@
       </button>
       <div class="model-picker-wrap">
         <span class="model-label" id="model-label">Model:</span>
-        <select id="model-select" data-aria="model"></select>
+        <select id="model-select" data-aria="model" data-combo></select>
+        <span class="model-lock" id="model-lock" hidden>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span class="model-lock-text"></span>
+        </span>
       </div>
+      <button class="temp-btn" id="btn-lean" title="Hemat token" aria-label="Hemat token mode">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>
+        <span id="lean-label" class="temp-label-text">Lean</span>
+      </button>
       <button class="temp-btn" id="btn-temp" title="Temporary Chat" aria-label="Temporary chat">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
         <span id="temp-label" class="temp-label-text">Temp</span>
@@ -117,18 +126,96 @@
   </div>
 </div>
 
+<!-- MODAL: rename chat -->
+<div class="modal-backdrop" id="modal-rename">
+  <div class="modal">
+    <h3 id="rename-title">Rename chat</h3>
+    <label id="rename-label" for="rename-input">Name</label>
+    <input id="rename-input" type="text" maxlength="120" autocomplete="off">
+    <div class="row">
+      <button class="btn-ghost" id="rename-cancel">Cancel</button>
+      <button class="btn-primary" id="rename-ok">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: edit quota -->
+<div class="modal-backdrop" id="modal-quota">
+  <div class="modal">
+    <h3 id="quota-title">Edit quota</h3>
+    <label id="quota-label" for="quota-input">Daily limit</label>
+    <input id="quota-input" type="number" min="1" max="999999" step="1" autocomplete="off">
+    <div class="row">
+      <button class="btn-ghost" id="quota-cancel">Cancel</button>
+      <button class="btn-primary" id="quota-ok">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: admin -->
 <div class="modal-backdrop" id="modal-admin">
   <div class="modal">
     <h3 id="admin-title-el">Admin Panel</h3>
     <p class="modal-sub" id="admin-sub-el">Manage Teman Tanyamu users & models</p>
+    <h3 style="font-size:13.5px; margin-top:14px;" id="admin-users-title">Users</h3>
+    <p class="modal-sub" id="admin-users-sub" style="margin-bottom:6px;">Manage user accounts, roles & model access.</p>
     <div id="admin-users" style="margin-top:10px;"></div>
     <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
     <h3 style="font-size:13.5px;" id="admin-global-title">Global Default Model</h3>
     <p class="modal-sub" style="margin-bottom:8px;" id="admin-global-sub">Used by all users without an override.</p>
     <div style="display:flex; gap:8px;">
-      <select id="global-model-select" style="flex:1;"></select>
+      <select id="global-model-select" data-combo data-combo-stretch></select>
       <button class="btn-primary" id="global-model-save" style="padding:9px 15px; border-radius:9px; font-size:13px; font-weight:500;">Save</button>
+    </div>
+    <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
+    <h3 style="font-size:13.5px;" id="admin-router-title">Model Connection</h3>
+    <p class="modal-sub" style="margin-bottom:8px;" id="admin-router-sub">OpenAI-compatible base URL & API key for all providers.</p>
+    <div class="router-status" id="router-status"><span class="rs-dot"></span><span id="router-status-text">-</span></div>
+    <label for="router-base" id="lbl-router-base">Base URL</label>
+    <input id="router-base" type="text" placeholder="http://localhost:20128/v1" autocomplete="off" spellcheck="false">
+    <label for="router-key" id="lbl-router-key">API Key</label>
+    <div class="router-key-row">
+      <input id="router-key" type="password" placeholder="" autocomplete="off" spellcheck="false">
+      <button type="button" class="icon-btn" id="router-key-eye" title="Show / hide" aria-label="Show / hide API key">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+    <div class="router-actions">
+      <button class="btn-ghost" id="router-test" style="padding:9px 15px; border-radius:9px; font-size:13px;">Test</button>
+      <button class="btn-primary" id="router-save" style="flex:1; padding:9px 15px; border-radius:9px; font-size:13px; font-weight:500;">Save</button>
+    </div>
+    <div class="router-result" id="router-result" hidden></div>
+    <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
+    <h3 style="font-size:13.5px;" id="admin-token-title">Token Saver</h3>
+    <p class="modal-sub" style="margin-bottom:8px;" id="admin-token-sub">Context budget & reply cap for all chats. Today: <span id="admin-today-usage">-</span></p>
+    <button class="btn-ghost" id="admin-reset-usage" style="padding:5px 10px; font-size:11.5px; border-radius:7px; margin-bottom:10px;">Reset All Usage</button>
+    <div class="token-grid" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+      <div>
+        <label for="set-hist-budget" id="lbl-hist-budget">History budget (tokens)</label>
+        <input id="set-hist-budget" type="number" value="1600" min="200" max="32000" step="100">
+      </div>
+      <div>
+        <label for="set-max-reply" id="lbl-max-reply">Max reply (tokens)</label>
+        <input id="set-max-reply" type="number" value="1024" min="64" max="8192" step="64">
+      </div>
+      <div>
+        <label for="set-timeout" id="lbl-timeout">Timeout (seconds)</label>
+        <input id="set-timeout" type="number" value="120" min="30" max="600" step="10">
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button class="btn-primary" id="token-save" style="flex:1; padding:9px 15px; border-radius:9px; font-size:13px; font-weight:500;">Save</button>
+      <button class="btn-ghost" id="token-reset" style="padding:9px 15px; border-radius:9px; font-size:13px;">Reset</button>
+    </div>
+    <div class="setting-row" style="margin-top:12px;">
+      <div class="setting-row-main">
+        <span id="lbl-memory-enabled" class="setting-row-title">Cross-chat memory</span>
+        <span id="lbl-memory-enabled-sub" class="setting-row-sub">Share learned facts across all chats</span>
+      </div>
+      <label class="owui-switch" for="set-memory-enabled" title="Toggle">
+        <input type="checkbox" id="set-memory-enabled" checked="">
+        <span class="owui-slider"></span>
+      </label>
     </div>
     <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
     <h3 style="font-size:13.5px;" id="admin-add-title">Add User</h3>
@@ -146,6 +233,17 @@
         <button type="submit" class="btn-primary">Add</button>
       </div>
     </form>
+    <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
+    <h3 style="font-size:13.5px;" id="admin-ai-avatar-title">AI Assistant Avatar</h3>
+    <p class="modal-sub" style="margin-bottom:8px;" id="admin-ai-avatar-sub">Set or reset the assistant avatar shown in chat (applies to everyone).</p>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div id="admin-ai-avatar-preview" class="avatar avatar-pick-preview">AI</div>
+      <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
+        <label class="avatar-pill-btn" for="admin-ai-avatar-file" id="admin-ai-avatar-pick">Choose Image</label>
+        <input type="file" id="admin-ai-avatar-file" accept="image/*" style="display:none;">
+        <button class="avatar-pill-btn" id="admin-ai-avatar-reset">Reset to Default</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -157,11 +255,11 @@
 
     <h3 style="font-size:13.5px; margin-top:16px;" id="avatar-title-el">Avatar</h3>
     <div style="display:flex; align-items:center; gap:12px; margin-top:8px;">
-      <div id="settings-avatar-preview" class="avatar" style="width:52px; height:52px; font-size:20px; overflow:hidden;">?</div>
+      <div id="settings-avatar-preview" class="avatar avatar-pick-preview">?</div>
       <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
-        <label class="btn-ghost" for="avatar-file" style="text-align:center; padding:8px; border-radius:9px; font-size:13px; cursor:pointer;" id="avatar-pick-label">Choose Image</label>
+        <label class="avatar-pill-btn" for="avatar-file" id="avatar-pick-label">Choose Image</label>
         <input type="file" id="avatar-file" accept="image/*" style="display:none;">
-        <button class="btn-ghost" id="avatar-remove" style="padding:8px; border-radius:9px; font-size:13px;">Remove Avatar</button>
+        <button class="avatar-pill-btn danger" id="avatar-remove">Remove Avatar</button>
       </div>
     </div>
 
@@ -173,6 +271,15 @@
       <input type="password" id="pw-next" autocomplete="new-password" required minlength="4">
       <button type="submit" class="btn-primary" id="pw-save-btn" style="margin-top:12px; padding:9px 15px; border-radius:9px; font-size:13px; font-weight:500;">Save Password</button>
     </form>
+
+    <h3 style="font-size:13.5px; margin-top:18px;" id="memory-title-el">Memory About You</h3>
+    <p class="modal-sub" id="memory-sub-el">Facts the AI remembers across all chats. Auto-updated; you can edit.</p>
+    <div id="memory-facts" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <input id="memory-add-input" placeholder="e.g. user suka strawberry" style="flex:1;">
+      <button class="btn-ghost" id="memory-add-btn" style="padding:8px 14px; border-radius:9px; font-size:13px;">+</button>
+    </div>
+    <button class="btn-ghost" id="memory-clear-btn" style="width:100%; margin-top:8px; padding:8px; border-radius:9px; font-size:13px;">Clear all memory</button>
 
     <h3 style="font-size:13.5px; margin-top:18px;" id="wallpaper-title-el">Chat Wallpaper</h3>
     <p class="modal-sub" id="wallpaper-sub-el">Quick presets or a custom image (only for you).</p>
@@ -201,6 +308,6 @@
 
 <div id="toast" role="status"></div>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=1.0-beta.5"></script>
 </body>
 </html>

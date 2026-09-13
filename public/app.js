@@ -6,6 +6,8 @@ let streaming = false;
 let abortCtrl = null;
 let pendingDeleteId = null;
 let tempMode = localStorage.getItem('tempMode') === '1';
+let chatLean = false; // per-chat lean (no-history token saver) — loaded with openChat
+let focusMode = localStorage.getItem('focusMode') === '1'; // lean global for temp chat too (persisted)
 
 // ---------- i18n (default: English) ----------
 const I18N = {
@@ -33,11 +35,59 @@ const I18N = {
     empty_sub: 'Pick a model, type your question, answers stream in real time.',
     model_label: 'Model:',
     model_locked: 'Only admins can change the model',
+    model_lock_short: 'Locked',
+    model_locked_hint: 'Ask an admin to set your model, or it follows the global default.',
     aria_model: 'Select model',
     temp_on: 'Temporary Chat ON. History will not be saved.',
     temp_off: 'Temporary Chat OFF. History is saved again.',
     temp_badge: 'Temporary',
     temp_label: 'Temp',
+    lean_label: 'Eco',
+    lean_on: 'Eco ON: answers without history (big token saving).',
+    lean_off: 'Eco OFF: context history is used again.',
+    lean_badge: 'Eco · no history',
+    lean_temp_on: 'Eco works in Temp Chat too',
+    lean_temp_off: 'Eco disabled while Temp Chat is ON',
+    memory_title: 'Memory About You',
+    memory_sub: 'Facts the AI remembers across all chats. Auto-updated; you can edit.',
+    memory_empty: 'No memory yet. It builds itself as you chat.',
+    memory_add_ph: 'e.g. user suka strawberry',
+    memory_clear: 'Clear all memory',
+    memory_cleared: 'Memory cleared',
+    memory_saved: 'Memory updated',
+    memory_del: 'Delete fact',
+    usage_tooltip: (u) => `tokens: ${u.total} (prompt ${u.prompt}, reply ${u.completion})`,
+    token_title: 'Token Saver',
+    token_sub: 'Context budget, reply cap & timeout for all chats.',
+    hist_budget: 'History budget (tokens)',
+    max_reply: 'Max reply (tokens)',
+    timeout_lbl: 'Timeout (seconds)',
+    ai_avatar_title: 'AI Assistant Avatar',
+    ai_avatar_sub: 'Set or reset the assistant avatar shown in chat (applies to everyone).',
+    ai_avatar_pick: 'Choose Image',
+    ai_avatar_reset: 'Reset to Default',
+    memory_enabled_lbl: 'Cross-chat memory',
+    memory_enabled_sub: 'Share learned facts across all chats',
+    token_saved: 'Token saver settings saved',
+    token_reset: 'Token saver reset to defaults',
+    router_title: 'Model Connection',
+    router_sub: 'OpenAI-compatible base URL & API key for all providers.',
+    router_base_lbl: 'Base URL',
+    router_key_lbl: 'API Key',
+    router_key_ph: (m) => `Saved: ${m} — leave empty to keep`,
+    router_key_ph_none: 'e.g. sk-abc123...',
+    router_saved: 'Gateway settings saved',
+    router_testing: 'Testing…',
+    router_test_ok: (ms, n) => `Connected in ${ms} ms — ${n} models found`,
+    router_test_bad: (s) => `Reached server, but HTTP ${s}. Check the base URL path & key.`,
+    router_status_ok: (src) => `Configured (${src})`,
+    router_status_bad: 'Not configured — chat is disabled until a valid key & URL are set',
+    router_source_database: 'dashboard',
+    router_source_env: 'env',
+    router_source_none: 'none',
+    router_test_btn: 'Test',
+    router_save_btn: 'Save',
+    today_usage: (t, p, c) => `today ${t} tokens (prompt ${p} / reply ${c})`,
     aria_sidebar: 'Toggle chat list',
     aria_new_chat: 'New chat',
     aria_minimize: 'Hide sidebar',
@@ -60,7 +110,18 @@ const I18N = {
     regen: 'Retry',
     typing: 'thinking...',
     quota_admin: 'Admin · unlimited',
+    quota_admin_role: 'Admin',
+    quota_admin_unlimited: 'unlimited',
     quota_user: (u, m) => `Quota: ${u}/${m} today`,
+    quota_chip_model: 'Model',
+    rename_title: 'Rename chat',
+    rename_label: 'Name',
+    rename_save: 'Save',
+    quota_edit_title: 'Edit daily quota',
+    quota_edit_label: 'Chats per day (1 - 999999)',
+    quota_saved: 'Quota updated',
+    combo_search_ph: 'Search models...',
+    combo_no_results: 'No models found',
     model_changed: (m) => 'Model: ' + m,
     copied: 'Copied to clipboard',
     chat_deleted: 'Chat deleted',
@@ -89,18 +150,36 @@ const I18N = {
     admin_close: 'Close',
     admin_today: (u, q) => `Today: ${u}/${q} chats`,
     admin_resetpw: 'Reset Password',
-    admin_reset_quota: 'Reset Kuota',
-    admin_quota_reset_ok: 'Kuota harian direset',
-    admin_global_tag: 'Default global',
-    admin_role_admin: 'Admin',
-    admin_role_user: 'User',
     admin_reset_quota: 'Reset Quota',
+    admin_edit_quota: 'Edit Quota',
     admin_quota_reset_ok: 'Daily quota reset',
+    admin_reset_all: 'Reset All Usage',
+    admin_reset_all_ok: 'All usage reset',
+    admin_reset_all_confirm: 'Reset all usage for every user? This cannot be undone.',
     admin_global_tag: 'Global default',
+    admin_users_title: 'Users List',
+    admin_users_sub: 'Manage user accounts, roles & model access.',
+    admin_col_user: 'User',
+    admin_col_username: 'Username',
+    admin_col_avatar: 'Avatar',
+    admin_col_role: 'Role',
+    admin_col_status: 'Status',
+    admin_col_model: 'Model',
+    admin_col_usage: 'Usage',
+    admin_col_actions: 'Actions',
     admin_role_admin: 'Admin',
     admin_role_user: 'User',
     admin_deactivate: 'Deactivate',
     admin_activate: 'Activate',
+    admin_self_deactivate: 'You cannot deactivate your own active admin account',
+    admin_avatar_prompt: 'Avatar: type "upload" to change or "reset" to remove',
+    admin_avatar_reset: 'Avatar reset',
+    admin_avatar_upload: 'Choose image for this user avatar',
+    admin_avatar_uploaded: 'Avatar updated',
+    admin_avatar_title: 'Avatar Actions',
+    admin_avatar_upload_label: 'Upload Image',
+    admin_avatar_reset_label: 'Reset to Default',
+    admin_avatar_cancel: 'Cancel',
     admin_pw_reset_ok: 'Password reset. User must log in again.',
     admin_user_added: 'User added',
     admin_user_deleted: 'User deleted',
@@ -164,11 +243,59 @@ const I18N = {
     empty_sub: 'Pilih model, tulis pertanyaanmu, jawaban mengalir langsung.',
     model_label: 'Model:',
     model_locked: 'Hanya admin yang dapat mengganti model',
+    model_lock_short: 'Terkunci',
+    model_locked_hint: 'Minta admin memilihkan model, atau ikuti model default global.',
     aria_model: 'Pilih model',
     temp_on: 'Chat Sementara AKTIF. Riwayat tidak disimpan.',
     temp_off: 'Chat Sementara MATI. Riwayat disimpan kembali.',
     temp_badge: 'Sementara',
     temp_label: 'Sementara',
+    lean_label: 'Eco',
+    lean_on: 'Eco AKTIF: jawab tanpa riwayat (hemat token besar).',
+    lean_off: 'Eco MATI: konteks riwayat dipakai lagi.',
+    lean_badge: 'Eco · tanpa riwayat',
+    lean_temp_on: 'Eco juga aktif di Chat Sementara',
+    lean_temp_off: 'Eco nonaktif saat Chat Sementara AKTIF',
+    memory_title: 'Memori Tentang Kamu',
+    memory_sub: 'Fakta yang diingat AI di semua chat. Terisi otomatis; bisa kamu edit.',
+    memory_empty: 'Belum ada memori. Terisi sendiri sambil ngobrol.',
+    memory_add_ph: 'misal: user suka strawberry',
+    memory_clear: 'Hapus semua memori',
+    memory_cleared: 'Memori dihapus',
+    memory_saved: 'Memori diperbarui',
+    memory_del: 'Hapus fakta',
+    usage_tooltip: (u) => `token: ${u.total} (prompt ${u.prompt}, balasan ${u.completion})`,
+    token_title: 'Penghemat Token',
+    token_sub: 'Budget konteks, batas balasan & timeout untuk semua chat.',
+    hist_budget: 'Budget riwayat (token)',
+    max_reply: 'Maks balasan (token)',
+    timeout_lbl: 'Timeout (detik)',
+    ai_avatar_title: 'Avatar Asisten AI',
+    ai_avatar_sub: 'Atur/reset avatar asisten yang tampil di chat (berlaku untuk semua).',
+    ai_avatar_pick: 'Pilih Gambar',
+    ai_avatar_reset: 'Reset ke Default',
+    memory_enabled_lbl: 'Memori lintas chat',
+    memory_enabled_sub: 'Bagikan fakta yang dipelajari ke semua chat',
+    token_saved: 'Pengaturan penghemat token disimpan',
+    token_reset: 'Penghemat token direset ke bawaan',
+    router_title: 'Koneksi Model',
+    router_sub: 'Base URL & API key kompatibel OpenAI untuk semua provider.',
+    router_base_lbl: 'Base URL',
+    router_key_lbl: 'API Key',
+    router_key_ph: (m) => `Tersimpan: ${m} — kosongkan jika tidak diganti`,
+    router_key_ph_none: 'mis. sk-abc123...',
+    router_saved: 'Pengaturan gateway disimpan',
+    router_testing: 'Menguji…',
+    router_test_ok: (ms, n) => `Terhubung dalam ${ms} ms — ${n} model ditemukan`,
+    router_test_bad: (s) => `Server terjangkau, tapi HTTP ${s}. Cek path base URL & key.`,
+    router_status_ok: (src) => `Terkonfigurasi (${src})`,
+    router_status_bad: 'Belum dikonfigurasi — chat dinonaktifkan sampai key & URL valid diisi',
+    router_source_database: 'dashboard',
+    router_source_env: 'env',
+    router_source_none: 'kosong',
+    router_test_btn: 'Uji',
+    router_save_btn: 'Simpan',
+    today_usage: (t, p, c) => `hari ini ${t} token (prompt ${p} / balasan ${c})`,
     aria_sidebar: 'Buka daftar chat',
     aria_new_chat: 'Chat baru',
     aria_minimize: 'Sembunyikan sidebar',
@@ -185,7 +312,18 @@ const I18N = {
     regen: 'Ulangi',
     typing: 'mengetik...',
     quota_admin: 'Admin · tanpa batas',
+    quota_admin_role: 'Admin',
+    quota_admin_unlimited: 'tanpa batas',
     quota_user: (u, m) => `Kuota: ${u}/${m} hari ini`,
+    quota_chip_model: 'Model',
+    rename_title: 'Ganti nama chat',
+    rename_label: 'Nama',
+    rename_save: 'Simpan',
+    quota_edit_title: 'Edit kuota harian',
+    quota_edit_label: 'Chat per hari (1 - 999999)',
+    quota_saved: 'Kuota diperbarui',
+    combo_search_ph: 'Cari model...',
+    combo_no_results: 'Model tidak ditemukan',
     model_changed: (m) => 'Model: ' + m,
     copied: 'Tersalin ke clipboard',
     chat_deleted: 'Chat dihapus',
@@ -214,13 +352,36 @@ const I18N = {
     admin_close: 'Tutup',
     admin_today: (u, q) => `Hari ini: ${u}/${q} chat`,
     admin_resetpw: 'Reset Password',
-    admin_reset_quota: 'Reset Quota',
-    admin_quota_reset_ok: 'Daily quota reset',
-    admin_global_tag: 'Global default',
+    admin_reset_quota: 'Reset Kuota',
+    admin_edit_quota: 'Edit Kuota',
+    admin_quota_reset_ok: 'Kuota harian direset',
+    admin_reset_all: 'Reset Semua Pemakaian',
+    admin_reset_all_ok: 'Semua pemakaian direset',
+    admin_reset_all_confirm: 'Reset semua pemakaian untuk semua user? Tindakan ini tidak bisa dibatalkan.',
+    admin_global_tag: 'Default global',
+    admin_users_title: 'Daftar Pengguna',
+    admin_users_sub: 'Kelola akun pengguna, peran & akses model.',
+    admin_col_user: 'Pengguna',
+    admin_col_username: 'Username',
+    admin_col_avatar: 'Avatar',
+    admin_col_role: 'Peran',
+    admin_col_status: 'Status',
+    admin_col_model: 'Model',
+    admin_col_usage: 'Pemakaian',
+    admin_col_actions: 'Aksi',
     admin_role_admin: 'Admin',
     admin_role_user: 'User',
     admin_deactivate: 'Nonaktifkan',
     admin_activate: 'Aktifkan',
+    admin_self_deactivate: 'Kamu tidak bisa menonaktifkan akun admin sendiri yang aktif',
+    admin_avatar_prompt: 'Avatar: ketik "upload" untuk ganti atau "reset" untuk hapus',
+    admin_avatar_reset: 'Avatar direset',
+    admin_avatar_upload: 'Pilih gambar untuk avatar user ini',
+    admin_avatar_uploaded: 'Avatar diperbarui',
+    admin_avatar_title: 'Aksi Avatar',
+    admin_avatar_upload_label: 'Unggah Gambar',
+    admin_avatar_reset_label: 'Reset ke Default',
+    admin_avatar_cancel: 'Batal',
     admin_pw_reset_ok: 'Password direset. User diminta login ulang.',
     admin_user_added: 'User ditambahkan',
     admin_user_deleted: 'User dihapus',
@@ -265,13 +426,20 @@ const ERR_MAP = {
   ERR_ADMIN_ONLY: { en: 'Admin only', id: 'Khusus admin' },
   ERR_FIELDS_REQUIRED: { en: 'All fields are required', id: 'Semua kolom wajib diisi' },
   ERR_LOGIN: { en: 'Wrong username or password', id: 'Username atau password salah' },
+  ERR_ROUTER_DOWN: { en: 'Cannot reach the model server. Check the gateway (9Router) and base URL in Admin Dashboard.', id: 'Server model tidak bisa dihubungi. Cek gateway (9Router) dan Base URL di Dashboard Admin.' },
+  ERR_ROUTER_NOT_CONFIGURED: { en: 'Model gateway not configured yet. Ask the admin to set base URL & API key in Admin Dashboard.', id: 'Gateway model belum dikonfigurasi. Minta admin mengisi Base URL & API key di Dashboard Admin.' },
+  ERR_BASE_REQUIRED: { en: 'Base URL is required', id: 'Base URL wajib diisi' },
+  ERR_BASE_INVALID: { en: 'Invalid URL — use http:// or https:// with a valid address', id: 'URL tidak valid — gunakan http:// atau https:// dengan alamat yang benar' },
+  ERR_BASE_BLOCKED_HOST: { en: 'That host is not allowed (metadata/link-local addresses are blocked)', id: 'Host itu tidak diizinkan (alamat metadata/link-local diblokir)' },
   ERR_INACTIVE: { en: 'Account disabled. Contact admin.', id: 'Akun dinonaktifkan. Hubungi admin.' },
   ERR_PW_SHORT: { en: 'Password must be at least 4 characters', id: 'Password minimal 4 karakter' },
   ERR_OLD_PW: { en: 'Old password is wrong', id: 'Password lama salah' },
   ERR_AVATAR_FORMAT: { en: 'Avatar must be an image', id: 'Avatar harus berupa gambar' },
   ERR_TOO_BIG: { en: 'Image too large (max ~300KB)', id: 'Gambar terlalu besar (maks ~300KB)' },
+  ERR_BAD_TIMEOUT: { en: 'Timeout must be 30–600 seconds', id: 'Timeout harus 30–600 detik' },
   ERR_WALLPAPER_FORMAT: { en: 'Wallpaper format not supported', id: 'Format wallpaper tidak didukung' },
   ERR_NOT_FOUND: { en: 'Not found', id: 'Tidak ditemukan' },
+  ERR_TIMEOUT: { en: 'The model/provider took too long. Check that the model & provider are online and your connection is stable, then try again.', id: 'Model/provider terlalu lama merespons. Pastikan model & provider online dan koneksimu stabil, lalu coba lagi.' },
   ERR_SELF_DELETE: { en: "Cannot delete yourself", id: 'Tidak bisa hapus diri sendiri' },
   ERR_SELF_DEACTIVATE: { en: 'Cannot deactivate yourself', id: 'Tidak bisa menonaktifkan diri sendiri' },
   ERR_USERNAME_TAKEN: { en: 'Username already taken', id: 'Username sudah dipakai' },
@@ -335,9 +503,10 @@ function applyI18N() {
     setT('#confirm-title', t('confirm_title'));
     setT('#confirm-cancel', t('cancel'));
     setT('#confirm-ok', t('del_ok'));
-    // admin modal
     setT('#admin-title-el', t('admin_title'));
     setT('#admin-sub-el', t('admin_sub'));
+    setT('#admin-users-title', t('admin_users_title'));
+    setT('#admin-users-sub', t('admin_users_sub'));
     setT('#admin-global-title', t('admin_global'));
     setT('#admin-global-sub', t('admin_global_sub'));
     setT('#global-model-save', t('admin_save'));
@@ -350,7 +519,6 @@ function applyI18N() {
     setT('label[for="add-quota"]', t('admin_quota'));
     setT('#admin-close', t('admin_close'));
     setT('#form-add-user button[type="submit"]', t('admin_add_btn'));
-    // settings modal
     setT('#settings-title-el', t('settings_title'));
     setT('#avatar-title-el', t('avatar'));
     setT('#avatar-pick-label', t('avatar_pick'));
@@ -361,12 +529,38 @@ function applyI18N() {
     setT('#pw-save-btn', t('pw_save'));
     setT('#wallpaper-title-el', t('wallpaper_title'));
     setT('#wallpaper-sub-el', t('wallpaper_sub'));
+    setT('#memory-title-el', t('memory_title'));
+    setT('#memory-sub-el', t('memory_sub'));
+    setT('#memory-clear-btn', t('memory_clear'));
+    setP('#memory-add-input', t('memory_add_ph'));
+    setT('#admin-token-title', t('token_title'));
+    setT('#admin-router-title', t('router_title'));
+    setT('#admin-router-sub', t('router_sub'));
+    setT('label[for="router-base"]', t('router_base_lbl'));
+    setT('label[for="router-key"]', t('router_key_lbl'));
+    setT('#router-test', t('router_test_btn'));
+    setT('#router-save', t('router_save_btn'));
+    if (routerCfg) {
+      $('#router-key').placeholder = routerCfg.api_key_masked ? t('router_key_ph', routerCfg.api_key_masked) : t('router_key_ph_none');
+      renderRouterStatus();
+    }
+    setT('label[for="set-hist-budget"]', t('hist_budget'));
+    setT('label[for="set-max-reply"]', t('max_reply'));
+    setT('label[for="set-timeout"]', t('timeout_lbl'));
+    setT('#admin-ai-avatar-title', t('ai_avatar_title'));
+    setT('#admin-ai-avatar-sub', t('ai_avatar_sub'));
+    setT('#admin-ai-avatar-pick', t('ai_avatar_pick'));
+    setT('#admin-ai-avatar-reset', t('ai_avatar_reset'));
+    setT('#admin-reset-usage', t('admin_reset_all'));
+    setT('#lbl-memory-enabled', t('memory_enabled_lbl'));
+    setT('#lbl-memory-enabled-sub', t('memory_enabled_sub'));
+    applyLeanUI();
     setT('#wallpaper-pick-label', t('wallpaper_upload'));
     setT('#wallpaper-reset', t('wallpaper_reset'));
     setT('#settings-close', t('admin_close'));
     updateQuota();
+    applyModelLockUI(document.querySelector('#model-select').disabled);
     applyTempUI();
-    // re-render dynamic lists (only when logged in)
     if (currentUser) loadChats();
     const es = $('#empty-state');
     if (es) {
@@ -392,6 +586,9 @@ const SEND_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" s
 const STOP_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 const ICON_COPY = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const ICON_REFRESH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+const ICON_UPLOAD = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+const ICON_TRASH = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+const ICON_X = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
 function toast(msg, type = '') {
   const t = $('#toast');
@@ -432,7 +629,6 @@ function renderMarkdown(text) {
 function blockImagePaste(e) {
   const dt = e.clipboardData || (e.originalEvent && e.clipboardData);
   if (!dt) return;
-  // 1) any image file item
   if (dt.items && dt.items.length) {
     for (const item of dt.items) {
       if (item.type && item.type.startsWith('image/')) {
@@ -443,7 +639,6 @@ function blockImagePaste(e) {
       }
     }
   }
-  // 2) text containing image filename
   const text = dt.getData ? dt.getData('text/plain') : '';
   if (text && /[^\s]*\.(jpe?g|png|gif|webp|bmp|heic)\b/i.test(text)) {
     e.preventDefault();
@@ -544,7 +739,6 @@ $('#logout-ok').addEventListener('click', async () => {
   $('#modal-logout').classList.remove('active');
   if (abortCtrl) abortCtrl.abort(); // stop stream berjalan
   await fetch('/api/logout', { method: 'POST' });
-  // reset state SPA tanpa reload
   currentUser = null;
   currentChatId = null;
   chats = [];
@@ -574,7 +768,7 @@ async function enterApp() {
   $('#login-view').style.display = 'none';
   $('#app-view').classList.add('ready', 'active');
   $('#lbl-user').textContent = currentUser.username;
-  $('#avatar-init').textContent = currentUser.username.slice(0, 1).toUpperCase();
+  renderSideAvatar();
   updateQuota();
   if (currentUser.role === 'admin') $('#btn-admin').classList.add('show');
   await loadModels();
@@ -584,44 +778,90 @@ async function enterApp() {
 }
 
 function updateModelBadge() {
-  // show override status next to quota
   const el = $('#lbl-quota');
-  if (!currentUser) return;
+  if (!currentUser || !el) return;
+  let chip = el.querySelector('.qmodel');
   if (currentUser.model_override) {
-    el.dataset.override = currentUser.model_override;
-  } else {
-    delete el.dataset.override;
+    if (!chip) {
+      chip = document.createElement('span');
+      chip.className = 'qmodel';
+      chip.innerHTML = '<span class="qk"></span><b></b>';
+      el.appendChild(chip);
+    }
+    chip.querySelector('.qk').textContent = t('quota_chip_model');
+    chip.querySelector('b').textContent = currentUser.model_override;
+    chip.querySelector('b').title = currentUser.model_override;
+  } else if (chip) {
+    chip.remove();
   }
 }
 
 function updateQuota() {
   if (!currentUser) return;
   const el = $('#lbl-quota');
-  if (currentUser.role === 'admin') { el.textContent = t('quota_admin'); el.className = 'uquota'; return; }
-  el.textContent = t('quota_user', currentUser.quota_used, currentUser.quota_max);
-  el.className = 'uquota' + (currentUser.quota_used >= currentUser.quota_max ? ' warn' : '');
+  let text;
+  if (currentUser.role === 'admin') {
+    text = `${t('quota_admin_role')} — ${t('quota_admin_unlimited')}`;
+    el.className = 'uquota';
+  } else {
+    const warn = currentUser.quota_used >= currentUser.quota_max;
+    text = t('quota_user', currentUser.quota_used, currentUser.quota_max);
+    el.className = 'uquota' + (warn ? ' warn' : '');
+  }
+  el.innerHTML = `<span class="qtext">${esc(text)}</span>`;
+  updateModelBadge();
 }
 
 // ---------- models ----------
+let headerModels = [];
+function setSelectDisabled(sel, disabled) {
+  sel.disabled = disabled;
+  const combo = sel.closest('.model-combo');
+  if (combo) {
+    const btn = combo.querySelector('.model-combo-btn');
+    if (btn) btn.disabled = disabled;
+    if (disabled) closeModelCombo(combo);
+  }
+  if (sel.id === 'model-select') applyModelLockUI(disabled);
+}
+
+function applyModelLockUI(locked) {
+  const wrap = document.querySelector('.model-picker-wrap');
+  if (!wrap) return;
+  wrap.classList.toggle('is-locked', !!locked);
+  const chip = $('#model-lock');
+  if (!chip) return;
+  if (locked) {
+    chip.hidden = false;
+    const txt = chip.querySelector('.model-lock-text');
+    if (txt) txt.textContent = t('model_lock_short');
+    chip.title = t('model_locked') + '. ' + t('model_locked_hint');
+  } else {
+    chip.hidden = true;
+  }
+}
+
 async function loadModels() {
   try {
     const r = await fetch('/api/models');
     if (!r.ok) throw new Error('fetch failed');
-    const models = await r.json();
+    headerModels = await r.json();
     const sel = $('#model-select');
-    sel.disabled = false; // re-enable (mis. setelah logout dari akun non-admin)
-    sel.innerHTML = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
-    // priority: user override (from /api/me) > saved local > global default (server order in list)
+    setSelectDisabled(sel, false); // re-enable (mis. setelah logout dari akun non-admin)
+    sel.innerHTML = headerModels.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
     const preferred = currentUser && currentUser.effective_model;
-    if (preferred && models.includes(preferred)) sel.value = preferred;
+    if (preferred && headerModels.includes(preferred)) sel.value = preferred;
     else {
       const saved = localStorage.getItem('model');
-      if (saved && models.includes(saved)) sel.value = saved;
+      if (saved && headerModels.includes(saved)) sel.value = saved;
     }
-    // admin-only: lock selector for regular users
+    updateModelCombo();
     if (currentUser && currentUser.role !== 'admin') {
-      sel.disabled = true;
+      setSelectDisabled(sel, true);
       sel.title = t('model_locked');
+      const combo = sel.closest('.model-combo');
+      const btn = combo && combo.querySelector('.model-combo-btn');
+      if (btn) btn.title = t('model_locked');
       const lbl = document.querySelector('.model-label');
       if (lbl) lbl.textContent = t('model_label');
     }
@@ -629,6 +869,145 @@ async function loadModels() {
     toast(t('conn_offline'), 'error');
   }
 }
+
+// ---------- searchable model combobox (Open WebUI style) ----------
+const ICON_SEARCH = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+const ICON_CHEV = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+const ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const comboState = { list: [], filter: '', hl: 0, sel: '', srcSel: null };
+
+function enhanceModelSelects() {
+  document.querySelectorAll('select[data-combo]').forEach(sel => {
+    if (sel.dataset.enhanced) return;
+    sel.dataset.enhanced = '1';
+    sel.classList.add('combo-source');
+    const combo = document.createElement('div');
+    combo.className = 'model-combo';
+    if (sel.hasAttribute('data-combo-stretch')) combo.classList.add('combo-stretch');
+    combo.innerHTML = `
+      <button type="button" class="model-combo-btn" aria-haspopup="listbox" aria-expanded="false">
+        <span class="combo-val"></span>
+        <span class="combo-chev">${ICON_CHEV}</span>
+      </button>`;
+    sel.parentNode.insertBefore(combo, sel);
+    combo.appendChild(sel);
+    combo.querySelector('.model-combo-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleModelCombo(combo, sel);
+    });
+  });
+  updateAllModelCombos();
+}
+
+function updateAllModelCombos() {
+  document.querySelectorAll('select[data-combo]').forEach(updateModelCombo);
+}
+
+function updateModelCombo(sel) {
+  sel = sel || $('#model-select');
+  if (!sel) return;
+  const combo = sel.closest('.model-combo');
+  if (!combo) return;
+  const val = combo.querySelector('.combo-val');
+  const opt = sel.options[sel.selectedIndex];
+  val.textContent = (opt && opt.textContent) || sel.value || '';
+}
+
+function toggleModelCombo(combo, sel) {
+  if (combo.classList.contains('open')) { closeModelCombo(combo); return; }
+  closeModelCombo();
+  const list = [...sel.options].map(o => ({ value: o.value, label: o.textContent.trim() }));
+  comboState.srcSel = sel; comboState.list = list; comboState.filter = ''; comboState.hl = 0; comboState.sel = sel.value;
+  const pop = document.createElement('div');
+  pop.className = 'model-combo-pop';
+  pop.innerHTML = `
+    <div class="model-combo-search">${ICON_SEARCH}<input type="text" autocomplete="off"></div>
+    <div class="model-combo-list" role="listbox"></div>`;
+  document.body.appendChild(pop);
+  const rect = combo.getBoundingClientRect();
+  const pw = Math.min(Math.max(rect.width, 260), window.innerWidth - 16);
+  pop.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - pw - 8)) + 'px';
+  pop.style.width = pw + 'px';
+  const below = rect.bottom + 6;
+  const ph = pop.offsetHeight;
+  pop.style.top = (below + ph > window.innerHeight && rect.top - 6 - ph > 0)
+    ? (rect.top - 6 - ph) + 'px' : below + 'px';
+  combo.classList.add('open');
+  setTimeout(() => pop.classList.add('open'), 20);
+  combo._pop = pop;
+  const search = pop.querySelector('input');
+  search.placeholder = t('combo_search_ph');
+  renderComboItems();
+  setTimeout(() => search.focus(), 30);
+  search.addEventListener('input', () => { comboState.filter = search.value.trim().toLowerCase(); comboState.hl = 0; renderComboItems(); });
+  search.addEventListener('keydown', comboKeys);
+  pop.addEventListener('click', (e) => e.stopPropagation());
+}
+
+function comboMatches() {
+  const f = comboState.filter;
+  return comboState.list.filter(o => !f || o.label.toLowerCase().includes(f) || (o.value || '').toLowerCase().includes(f));
+}
+
+function renderComboItems() {
+  const pop = comboState.srcSel && comboState.srcSel.closest('.model-combo')._pop;
+  if (!pop) return;
+  const box = pop.querySelector('.model-combo-list');
+  const matches = comboMatches();
+  if (!matches.length) { box.innerHTML = `<div class="model-combo-empty">${esc(t('combo_no_results'))}</div>`; return; }
+  box.innerHTML = matches.map((o, i) => `
+    <button type="button" class="model-combo-item ${i === comboState.hl ? 'hl' : ''} ${o.value === comboState.sel ? 'sel' : ''}" data-value="${esc(o.value)}" data-label="${esc(o.label)}" role="option">
+      <span>${esc(o.label)}</span>${o.value === comboState.sel ? `<span class="combo-check">${ICON_CHECK}</span>` : ''}
+    </button>`).join('');
+  box.querySelectorAll('.model-combo-item').forEach(btn => {
+    btn.addEventListener('click', () => pickComboModel(btn.dataset.value));
+  });
+}
+
+function comboKeys(e) {
+  const matches = comboMatches();
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    comboState.hl = Math.max(0, Math.min(matches.length - 1, comboState.hl + (e.key === 'ArrowDown' ? 1 : -1)));
+    renderComboItems();
+    const hl = comboState.srcSel.closest('.model-combo')._pop.querySelector('.model-combo-item.hl');
+    if (hl) hl.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (matches[comboState.hl]) pickComboModel(matches[comboState.hl].value);
+  } else if (e.key === 'Escape') {
+    e.preventDefault(); e.stopPropagation();
+    closeModelCombo();
+    if (comboState.srcSel) comboState.srcSel.closest('.model-combo').querySelector('.model-combo-btn').focus();
+  }
+}
+
+function pickComboModel(model) {
+  const sel = comboState.srcSel;
+  if (!sel) return;
+  closeModelCombo();
+  if (sel.value === model) { updateModelCombo(sel); return; }
+  sel.value = model;
+  updateModelCombo(sel);
+  if (sel === $('#model-select')) {
+    sel.dispatchEvent(new Event('change'));
+  } else {
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+
+function closeModelCombo(combo) {
+  combo = combo || document.querySelector('.model-combo.open');
+  if (!combo || !combo._pop) { document.querySelectorAll('.model-combo.open').forEach(c => { c.classList.remove('open'); }); return; }
+  combo.classList.remove('open');
+  combo._pop.classList.remove('open');
+  const pop = combo._pop;
+  combo._pop = null;
+  setTimeout(() => pop.remove(), 170);
+}
+
+document.addEventListener('click', () => closeModelCombo());
+document.addEventListener('scroll', () => closeModelCombo(), true);
 
 $('#model-select').addEventListener('change', async (e) => {
   const model = e.target.value;
@@ -640,7 +1019,6 @@ $('#model-select').addEventListener('change', async (e) => {
       body: JSON.stringify({ model })
     });
   }
-  // persist as per-user preference (admin only; selector is disabled for regular users)
   if (currentUser && currentUser.role === 'admin') {
     await fetch('/api/me/model', {
       method: 'PUT',
@@ -663,7 +1041,7 @@ async function loadChats() {
   }
   list.innerHTML = chats.map(c => `
     <div class="chat-item ${c.id === currentChatId ? 'active' : ''}" data-id="${c.id}" role="button" tabindex="0">
-      <span class="ico">${ICON_CHAT}</span>
+      <span class="ico">${c.lean ? '<span class="lean-dot" title="' + esc(t('lean_badge')) + '">⚡</span>' : ICON_CHAT}</span>
       <span class="title">${esc(c.title)}</span>
       <button class="del" data-rename="${c.id}" aria-label="${esc(t('rename_chat'))} ${esc(c.title)}" title="${esc(t('rename_chat'))}">✎</button>
       <button class="del" data-del="${c.id}" aria-label="${esc(t('del_chat'))} ${esc(c.title)}" title="${esc(t('del_chat'))}">✕</button>
@@ -685,16 +1063,7 @@ $('#chat-list').addEventListener('click', async (e) => {
     e.stopPropagation();
     const id = Number(ren.dataset.rename);
     const chat = chats.find(c => c.id === id);
-    const title = prompt(t('rename_prompt'), chat ? chat.title : '');
-    if (title && title.trim()) {
-      await fetch(`/api/chats/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim() })
-      });
-      await loadChats();
-      toast(t('chat_renamed'), 'success');
-    }
+    openRenameModal(id, chat ? chat.title : '');
     return;
   }
   const del = e.target.closest('[data-del]');
@@ -702,7 +1071,9 @@ $('#chat-list').addEventListener('click', async (e) => {
     e.stopPropagation();
     pendingDeleteId = Number(del.dataset.del);
     const chat = chats.find(c => c.id === pendingDeleteId);
+    $('#confirm-title').textContent = t('confirm_title');
     $('#confirm-text').textContent = t('confirm_del', chat ? chat.title : '');
+    $('#confirm-ok').textContent = t('del_ok');
     $('#modal-confirm').classList.add('active');
     $('#confirm-ok').focus();
     return;
@@ -717,11 +1088,100 @@ $('#chat-list').addEventListener('keydown', (e) => {
   }
 });
 
+// ---------- rename chat modal (no native prompt) ----------
+let pendingRenameId = null;
+function openRenameModal(id, currentTitle) {
+  pendingRenameId = id;
+  $('#rename-title').textContent = t('rename_title');
+  $('#rename-label').textContent = t('rename_label');
+  $('#rename-cancel').textContent = t('cancel');
+  $('#rename-ok').textContent = t('rename_save');
+  const inp = $('#rename-input');
+  inp.value = currentTitle || '';
+  $('#modal-rename').classList.add('active');
+  setTimeout(() => { inp.focus(); inp.select(); }, 60);
+}
+function closeRenameModal() {
+  $('#modal-rename').classList.remove('active');
+  pendingRenameId = null;
+}
+async function submitRename() {
+  if (pendingRenameId == null) return;
+  const id = pendingRenameId;
+  const title = $('#rename-input').value.trim();
+  if (!title) return;
+  closeRenameModal();
+  const r = await fetch(`/api/chats/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title })
+  });
+  if (!r.ok) { toast(terr((await r.json()).error) || terr('ERR_GENERIC'), 'error'); return; }
+  await loadChats();
+  toast(t('chat_renamed'), 'success');
+}
+$('#rename-cancel').addEventListener('click', closeRenameModal);
+$('#rename-ok').addEventListener('click', submitRename);
+$('#rename-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); submitRename(); }
+});
+$('#modal-rename').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeRenameModal(); });
+
+// ---------- edit quota modal (admin) ----------
+let pendingQuotaUserId = null;
+function openQuotaModal(userId, uname, current) {
+  pendingQuotaUserId = userId;
+  $('#quota-title').textContent = t('quota_edit_title') + ' — ' + uname;
+  $('#quota-label').textContent = t('quota_edit_label');
+  $('#quota-cancel').textContent = t('cancel');
+  $('#quota-ok').textContent = t('rename_save');
+  $('#quota-input').value = current;
+  $('#modal-quota').classList.add('active');
+  setTimeout(() => { $('#quota-input').focus(); $('#quota-input').select(); }, 60);
+}
+function closeQuotaModal() {
+  $('#modal-quota').classList.remove('active');
+  pendingQuotaUserId = null;
+}
+async function submitQuota() {
+  if (pendingQuotaUserId == null) return;
+  const id = pendingQuotaUserId;
+  const n = Math.floor(Number($('#quota-input').value));
+  if (!Number.isFinite(n) || n < 1 || n > 999999) { toast(terr('ERR_FIELDS_REQUIRED'), 'error'); return; }
+  closeQuotaModal();
+  const r = await fetch(`/api/admin/users/${id}/quota`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ daily_quota: n })
+  });
+  const data = await r.json();
+  if (!r.ok) { toast(terr(data.error) || terr('ERR_GENERIC'), 'error'); return; }
+  toast(t('quota_saved'), 'success');
+  await loadAdminUsers();
+}
+$('#quota-cancel').addEventListener('click', closeQuotaModal);
+$('#quota-ok').addEventListener('click', submitQuota);
+$('#quota-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); submitQuota(); }
+});
+$('#modal-quota').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeQuotaModal(); });
+
 $('#confirm-cancel').addEventListener('click', () => {
   $('#modal-confirm').classList.remove('active');
   pendingDeleteId = null;
+  pendingResetAll = false;
 });
 $('#confirm-ok').addEventListener('click', async () => {
+  if (pendingResetAll) {
+    pendingResetAll = false;
+    $('#modal-confirm').classList.remove('active');
+    const r = await fetch('/api/admin/reset-usage', { method: 'PUT' });
+    const data = await r.json();
+    if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
+    toast(t('admin_reset_all_ok'), 'success');
+    await loadAdminPanel();
+    return;
+  }
   await fetch(`/api/chats/${pendingDeleteId}`, { method: 'DELETE' });
   $('#modal-confirm').classList.remove('active');
   if (pendingDeleteId === currentChatId) {
@@ -734,7 +1194,7 @@ $('#confirm-ok').addEventListener('click', async () => {
 });
 
 function emptyStateHTML() {
-  const tempBanner = tempMode ? `<div class="temp-banner">👻 ${esc(t('temp_badge'))} — ${esc(t('temp_on'))}</div>` : '';
+  const tempBanner = tempMode ? `<div class="temp-banner"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:6px;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>${esc(t('temp_badge'))} — ${esc(t('temp_on'))}</div>` : '';
   return `<div class="empty-state" id="empty-state">
     <div class="big-logo"><img src="/logo.svg" alt="" style="width:100%; height:100%; border-radius:15px;"></div>
     ${tempBanner}
@@ -751,6 +1211,8 @@ $('#btn-new-chat').addEventListener('click', async () => {
   });
   const chat = await r.json();
   currentChatId = chat.id;
+  chatLean = false;
+  applyLeanUI();
   $('#messages').innerHTML = emptyStateHTML();
   await loadChats();
   closeMobileSidebar();
@@ -762,24 +1224,42 @@ async function openChat(id) {
   const r = await fetch(`/api/chats/${id}`);
   const chat = await r.json();
   $('#model-select').value = chat.model;
+  updateModelCombo($('#model-select'));
   localStorage.setItem('model', chat.model);
+  const row = chats.find(c => c.id === id);
+  chatLean = !!(row && row.lean);
+  applyLeanUI();
   renderMessages(chat.messages);
   await loadChats();
   closeMobileSidebar();
 }
 
+let lastRendered = [];
 function renderMessages(messages) {
+  lastRendered = messages || [];
   const box = $('#messages');
-  if (!messages.length) { box.innerHTML = emptyStateHTML(); return; }
-  box.innerHTML = `<div class="msg-col">${messages.map(m => messageHTML(m.role, m.content)).join('')}</div>`;
+  if (!lastRendered.length) { box.innerHTML = emptyStateHTML(); return; }
+  box.innerHTML = `<div class="msg-col">${lastRendered.map(m => messageHTML(m.role, m.content)).join('')}</div>`;
   box.scrollTop = box.scrollHeight;
+}
+
+function renderSideAvatar() {
+  const side = $('#avatar-init');
+  if (!side || !currentUser) return;
+  if (currentUser.avatar) {
+    side.innerHTML = `<img src="${esc(currentUser.avatar)}" alt="">`;
+  } else {
+    side.textContent = currentUser.username.slice(0, 1).toUpperCase();
+  }
 }
 
 function messageHTML(role, content, streaming) {
   const isUser = role === 'user';
   const initial = isUser ? (currentUser ? currentUser.username.slice(0,1).toUpperCase() : 'U') : 'AI';
+  const userAva = (isUser && currentUser && currentUser.avatar) ? `<img src="${esc(currentUser.avatar)}" alt="">` : initial;
+  const aiAvatar = (!isUser && currentUser && currentUser.assistant_avatar) ? `<img src="${esc(currentUser.assistant_avatar)}" alt="">` : initial;
   return `<div class="msg-block ${isUser ? 'user' : 'ai'}">
-    <div class="m-avatar">${initial}</div>
+    <div class="m-avatar">${isUser ? userAva : aiAvatar}</div>
     <div class="m-body">
       <div class="m-role">${isUser ? esc(t('you')) : esc(t('assistant'))}</div>
       <div class="m-content ${streaming ? 'stream-target' : ''}">${streaming && !content ? '<span class="typing-dots"><span></span><span></span><span></span></span>' : (isUser ? esc(content) : renderMarkdown(content))}</div>
@@ -791,7 +1271,6 @@ function messageHTML(role, content, streaming) {
   </div>`;
 }
 
-// copy & regenerate (delegated)
 document.addEventListener('click', async (e) => {
   const copyBtn = e.target.closest('[data-copy]');
   if (copyBtn) {
@@ -807,12 +1286,10 @@ document.addEventListener('click', async (e) => {
   if (regenBtn && !streaming) {
     const block = regenBtn.closest('.msg-block');
     const body = block.querySelector('.m-content');
-    // find preceding user message text from chat storage via API: simpler = use stored chats? Use last user msg from server history
     const r = await fetch(`/api/chats/${currentChatId}`);
     const chat = await r.json();
     const lastUser = [...chat.messages].reverse().find(m => m.role === 'user');
     if (!lastUser) { toast(t('err_generic'), 'error'); return; }
-    // delete last assistant message is complex; simplest: re-send same user prompt (creates new turn)
     inputMsg.value = lastUser.content;
     send();
   }
@@ -830,10 +1307,8 @@ inputMsg.addEventListener('input', () => {
   inputMsg.style.height = Math.min(inputMsg.scrollHeight, 170) + 'px';
 });
 
-// paste handler: image pasted -> inform model text-only (R-27 error state)
 
 
-// drop handler: same friendly guard
 
 btnSend.addEventListener('click', () => streaming ? stopStream() : send());
 
@@ -875,7 +1350,7 @@ async function sendTemp(text) {
     const res = await fetch('/api/temp-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, model: $('#model-select').value }),
+      body: JSON.stringify({ message: text, model: $('#model-select').value, lean: focusMode }),
       signal: abortCtrl.signal
     });
     if (!res.ok) {
@@ -911,15 +1386,20 @@ async function sendTemp(text) {
     if (e.name === 'AbortError') {
       toast(t('stream_stopped'));
     } else {
-      toast(e.message, 'error');
+      const msg = ERR_MAP[e.message] ? terr(e.message) : e.message;
+      toast(msg, 'error');
       const b = getStreamBubble(box);
-      if (b) b.innerHTML = `<span style="color:var(--danger)">${esc(t('err_generic'))}: ${esc(e.message)}</span>`;
+      if (b) b.innerHTML = `<span style="color:var(--danger)">${esc(t('err_generic'))}: ${esc(msg)}</span>`;
     }
   } finally {
     streaming = false;
     btnSend.classList.remove('stop');
     btnSend.innerHTML = SEND_ICON;
     abortCtrl = null;
+    try {
+      const me = await (await fetch('/api/me')).json();
+      if (me.username) { currentUser = me; updateQuota(); }
+    } catch (_) {}
   }
 }
 
@@ -955,7 +1435,6 @@ async function send() {
   const empty = $('#empty-state');
   if (empty) empty.remove();
 
-  // finalize any previous streaming bubble first
   const prev = box.querySelector('.stream-target');
   if (prev) prev.classList.remove('stream-target');
 
@@ -984,6 +1463,7 @@ async function send() {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let aiText = '';
+    let lastUsage = null;
     let buffer = '';
     const bubble = getStreamBubble(box);
 
@@ -998,6 +1478,7 @@ async function send() {
         try {
           const chunk = JSON.parse(line.slice(6));
           if (chunk.error) throw new Error(chunk.error);
+          if (chunk.usage) { lastUsage = chunk.usage; continue; }
           if (chunk.content) {
             aiText += chunk.content;
             bubble.innerHTML = renderMarkdown(aiText);
@@ -1006,13 +1487,23 @@ async function send() {
         } catch (e) { if (e.message && !e.message.includes('JSON')) throw e; }
       }
     }
+    if (lastUsage && bubble) {
+      bubble.classList.remove('stream-target');
+      const note = document.createElement('div');
+      note.className = 'm-usage';
+      note.textContent = t('usage_tooltip', lastUsage);
+      note.title = note.textContent;
+      const bodyEl = bubble.closest('.m-body');
+      if (bodyEl) bodyEl.appendChild(note);
+    }
   } catch (e) {
     if (e.name === 'AbortError') {
       toast(t('stream_stopped'));
     } else {
-      toast(e.message, 'error');
+      const msg = ERR_MAP[e.message] ? terr(e.message) : e.message;
+      toast(msg, 'error');
       const b = getStreamBubble(box);
-      if (b && !b.querySelector('.typing-dots')) b.innerHTML = `<span style="color:var(--danger)">${esc(t('err_generic'))}: ${esc(e.message)}</span>`;
+      if (b && !b.querySelector('.typing-dots')) b.innerHTML = `<span style="color:var(--danger)">${esc(t('err_generic'))}: ${esc(msg)}</span>`;
     }
   } finally {
     streaming = false;
@@ -1033,7 +1524,6 @@ function applyTempUI() {
   const lbl = $('#temp-label');
   if (lbl) lbl.textContent = t('temp_label');
   btn.title = tempMode ? t('temp_badge') + ' — ' + t('temp_on') : t('temp_label');
-  // refresh empty state banner if visible
   const es = $('#empty-state');
   if (es) {
     const box = $('#messages');
@@ -1054,6 +1544,84 @@ $('#btn-temp').addEventListener('click', () => {
   closeMobileSidebar();
 });
 
+// ---------- lean (per-chat token saver) + global focus for temp chat ----------
+function applyLeanUI() {
+  const btn = $('#btn-lean');
+  if (!btn) return;
+  const active = tempMode ? focusMode : chatLean;
+  btn.classList.toggle('active', active);
+  const lbl = $('#lean-label');
+  if (lbl) lbl.textContent = t('lean_label');
+  btn.title = (tempMode ? (focusMode ? t('lean_on') : t('lean_off')) : (chatLean ? t('lean_on') : t('lean_off'))) + (tempMode ? ' — ' + t('lean_temp_on') : '');
+}
+$('#btn-lean').addEventListener('click', async () => {
+  if (tempMode) {
+    focusMode = !focusMode;
+    localStorage.setItem('focusMode', focusMode ? '1' : '0');
+    applyLeanUI();
+    toast(focusMode ? t('lean_on') : t('lean_off'));
+    return;
+  }
+  if (!currentChatId) { toast(t('new_chat')); return; }
+  chatLean = !chatLean;
+  applyLeanUI();
+  toast(chatLean ? t('lean_on') : t('lean_off'));
+  await fetch(`/api/chats/${currentChatId}/lean`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lean: chatLean })
+  });
+  await loadChats();
+});
+
+// ---------- memory (settings modal) ----------
+async function renderMemoryFacts() {
+  const box = $('#memory-facts');
+  if (!box) return;
+  let data;
+  try { data = await (await fetch('/api/memory')).json(); } catch (_) { return; }
+  if (!data.facts || !data.facts.length) {
+    box.innerHTML = `<div style="font-size:12.5px; color:var(--text-3); padding:4px 2px;">${esc(t('memory_empty'))}</div>`;
+    return;
+  }
+  box.innerHTML = data.facts.map(f => `
+    <div class="memory-row" style="display:flex; align-items:center; gap:8px; font-size:13px; padding:7px 10px; border:1px solid var(--border); border-radius:9px;">
+      <span style="flex:1; word-break:break-word;">${esc(f.content)}</span>
+      <button class="icon-btn danger" data-del-fact="${f.id}" title="${esc(t('memory_del'))}" aria-label="${esc(t('memory_del'))}" style="width:26px;height:26px;">✕</button>
+    </div>`).join('');
+}
+$('#memory-facts').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-del-fact]');
+  if (!btn) return;
+  await fetch(`/api/memory/${btn.dataset.delFact}`, { method: 'DELETE' });
+  toast(t('memory_saved'), 'success');
+  await renderMemoryFacts();
+});
+async function addMemoryFact() {
+  const inp = $('#memory-add-input');
+  const text = inp.value.trim();
+  if (!text) return;
+  let data;
+  try {
+    const cur = await (await fetch('/api/memory')).json();
+    const facts = cur.facts.map(f => f.content).concat(text).slice(0, 20);
+    const r = await fetch('/api/memory', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ facts })
+    });
+    data = await r.json();
+  } catch (_) { return; }
+  if (data.ok) { inp.value = ''; toast(t('memory_saved'), 'success'); await renderMemoryFacts(); }
+}
+$('#memory-add-btn').addEventListener('click', addMemoryFact);
+$('#memory-add-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addMemoryFact(); } });
+$('#memory-clear-btn').addEventListener('click', async () => {
+  await fetch('/api/memory/clear', { method: 'POST' });
+  toast(t('memory_cleared'), 'success');
+  await renderMemoryFacts();
+});
+
 // ---------- sidebar minimize/maximize toggle (desktop) ----------
 const SIDEBAR_KEY = 'sidebarMinimized';
 const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
@@ -1068,7 +1636,6 @@ function setSidebarMinimized(min) {
   $('#sidebar').classList.toggle('minimized', min);
   localStorage.setItem(SIDEBAR_KEY, min ? '1' : '0');
 }
-// if resized to mobile, force expand
 window.addEventListener('resize', () => {
   if (isMobile() && $('#sidebar').classList.contains('minimized')) {
     setSidebarMinimized(false);
@@ -1078,7 +1645,6 @@ $('#btn-minimize').addEventListener('click', (e) => {
   e.stopPropagation();
   setSidebarMinimized(true);
 });
-// click anywhere on collapsed rail expands (except interactive elements)
 $('#sidebar').addEventListener('click', (e) => {
   if (!$('#sidebar').classList.contains('minimized')) return;
   if (e.target.closest('[data-del], [data-rename], .user-model-select, .icon-btn, button')) return;
@@ -1104,55 +1670,165 @@ let allModelsCache = [];
 
 $('#btn-admin').addEventListener('click', async () => {
   $('#modal-admin').classList.add('active');
+  loadRouterConfig();
   await loadAdminPanel();
 });
 $('#admin-close').addEventListener('click', () => $('#modal-admin').classList.remove('active'));
 
+let routerCfg = null;
+function renderRouterStatus() {
+  const box = $('#router-status'); if (!box || !routerCfg) return;
+  box.classList.toggle('rs-bad', !routerCfg.configured);
+  box.classList.toggle('rs-ok', !!routerCfg.configured);
+  $('#router-status-text').textContent = routerCfg.configured
+    ? t('router_status_ok', t('router_source_' + (routerCfg.source || 'none')))
+    : t('router_status_bad');
+}
+async function loadRouterConfig() {
+  try {
+    routerCfg = await (await fetch('/api/admin/router-config')).json();
+    if (!routerCfg || routerCfg.error) return;
+    $('#router-base').value = routerCfg.base_url || '';
+    $('#router-key').value = '';
+    $('#router-key').placeholder = routerCfg.api_key_masked ? t('router_key_ph', routerCfg.api_key_masked) : t('router_key_ph_none');
+    $('#router-result').hidden = true;
+    renderRouterStatus();
+  } catch (_) { /* keep last state */ }
+}
+$('#router-key-eye').addEventListener('click', () => {
+  const k = $('#router-key');
+  k.type = k.type === 'password' ? 'text' : 'password';
+});
+$('#router-save').addEventListener('click', async () => {
+  const body = { base_url: $('#router-base').value.trim() };
+  const key = $('#router-key').value.trim();
+  if (key) body.api_key = key;
+  const r = await fetch('/api/admin/router-config', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(terr(data.error) || data.error || 'Error', 'error'); return; }
+  routerCfg = Object.assign(routerCfg || {}, data);
+  $('#router-key').value = '';
+  $('#router-key').placeholder = routerCfg.api_key_masked ? t('router_key_ph', routerCfg.api_key_masked) : t('router_key_ph_none');
+  renderRouterStatus();
+  toast(t('router_saved'), 'success');
+  allModelsCache = [];
+  loadAdminPanel().catch(() => {});
+});
+$('#router-test').addEventListener('click', async () => {
+  const btn = $('#router-test'); const out = $('#router-result');
+  const body = {};
+  const b = $('#router-base').value.trim(); if (b) body.base_url = b;
+  const k = $('#router-key').value.trim(); if (k) body.api_key = k;
+  btn.disabled = true; btn.textContent = t('router_testing');
+  out.hidden = false; out.className = 'router-result'; out.textContent = '';
+  try {
+    const r = await fetch('/api/admin/router-test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      out.classList.add('rr-bad');
+      out.textContent = terr(data.error) || data.error || 'Error';
+    } else if (data.ok) {
+      out.classList.add('rr-ok');
+      out.textContent = t('router_test_ok', data.latency_ms, data.models);
+    } else {
+      out.classList.add('rr-bad');
+      out.textContent = t('router_test_bad', data.status);
+    }
+  } catch (e) {
+    out.classList.add('rr-bad');
+    out.textContent = String(e.message || e);
+  } finally {
+    btn.disabled = false; btn.textContent = t('router_test_btn');
+  }
+});
+
+const ADMIN_POLL_MS = 5000;
+setInterval(() => {
+  if (!$('#modal-admin').classList.contains('active')) return;
+  if ($('#modal-admin').querySelector(':hover')) return;
+  if (document.querySelector('.modal-backdrop.active:not(#modal-admin)')) return;
+  if (document.querySelector('.model-combo.open, .avatar-popover')) return;
+  if ($('#modal-admin').contains(document.activeElement) && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+  loadAdminPanel().catch(() => {});
+}, ADMIN_POLL_MS);
+
 async function loadAdminPanel() {
-  // fetch models once for dropdowns
   if (!allModelsCache.length) {
     allModelsCache = await (await fetch('/api/models')).json();
   }
-  // global default model setting
   const settings = await (await fetch('/api/admin/settings')).json();
   const gmSel = $('#global-model-select');
   gmSel.innerHTML = allModelsCache.map(m => `<option value="${esc(m)}" ${m === settings.default_model ? 'selected' : ''}>${esc(m)}</option>`).join('');
+  enhanceModelSelects();
+  $('#set-hist-budget').value = settings.history_token_budget || 1600;
+  $('#set-max-reply').value = settings.max_reply_tokens || 1024;
+  $('#set-timeout').value = settings.timeout_ms || 120;
+  $('#set-memory-enabled').checked = !!settings.memory_enabled;
+  if (settings.today_usage) $('#admin-today-usage').textContent = t('today_usage', settings.today_usage.t, settings.today_usage.p, settings.today_usage.c);
+  renderAdminAI();
   await loadAdminUsers();
 }
 
 async function loadAdminUsers() {
   const users = await (await fetch('/api/admin/users')).json();
-  $('#admin-users').innerHTML = users.map(u => {
+  $('#admin-users').innerHTML = `
+  <table class="admin-table">
+    <thead><tr>
+      <th>${esc(t('admin_col_avatar'))}</th>
+      <th>${esc(t('admin_col_username'))}</th>
+      <th>${esc(t('admin_col_role'))}</th>
+      <th>${esc(t('admin_col_status'))}</th>
+      <th>${esc(t('admin_col_model'))}</th>
+      <th>${esc(t('admin_col_usage'))}</th>
+      <th>${esc(t('admin_col_actions'))}</th>
+    </tr></thead>
+    <tbody>
+    ${users.map(u => {
     const avatarHTML = u.avatar
-      ? `<img src="${esc(u.avatar)}" style="width:100%; height:100%; object-fit:cover; border-radius:50%;" alt="">`
+      ? `<img src="${esc(u.avatar)}" alt="">`
       : esc(u.username.slice(0,1).toUpperCase());
     const opts = [`<option value="" ${!u.model_override ? 'selected' : ''}>${esc(t('admin_global_tag'))}</option>`]
       .concat(allModelsCache.map(m => `<option value="${esc(m)}" ${m === u.model_override ? 'selected' : ''}>${esc(m)}</option>`))
       .join('');
+    const isSelf = currentUser && currentUser.id === u.id;
     const statusDot = u.active
-      ? '<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--success); margin-left:6px;"></span>'
-      : '<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--danger); margin-left:6px;"></span>';
+      ? `<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--success);"></span>`
+      : `<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--danger);"></span>`;
+    const roleTag = u.role === 'admin'
+      ? `<span class="role-tag">${esc(t('admin_role_admin'))}</span>`
+      : `<span class="role-tag" style="background:rgba(139,92,246,0.12); color:var(--purple, #a78bfa);">${esc(t('admin_role_user'))}</span>`;
     return `
-    <div class="admin-user-row" style="${u.active ? '' : 'opacity:0.55;'}">
-      <div class="avatar" style="width:28px; height:28px; font-size:11.5px; overflow:hidden;">${avatarHTML}</div>
-      <div class="udetail">
-        <div><strong>${esc(u.username)}</strong>${u.role === 'admin' ? `<span class="role-tag">${esc(t('admin_role_admin'))}</span>` : ''}${statusDot}</div>
-        <div class="uusage">${esc(t('admin_today', u.used_today, u.daily_quota))}</div>
-        <select class="user-model-select" data-user="${u.id}" style="margin-top:5px; font-size:11.5px; padding:4px 8px;">${opts}</select>
-        <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
-          <button class="btn-ghost admin-action" style="padding:4px 10px; font-size:11px; border-radius:6px;" data-resetpw="${u.id}" data-uname="${esc(u.username)}">${esc(t('admin_resetpw'))}</button>
-          <button class="btn-ghost admin-action" style="padding:4px 10px; font-size:11px; border-radius:6px;" data-resetquota="${u.id}">${esc(t('admin_reset_quota'))}</button>
-          <button class="btn-ghost admin-action" style="padding:4px 10px; font-size:11px; border-radius:6px;" data-toggle-active="${u.id}" data-active="${u.active ? 1 : 0}">${u.active ? esc(t('admin_deactivate')) : esc(t('admin_activate'))}</button>
+    <tr class="${u.active ? '' : 'inactive'}">
+      <td data-label="${esc(t('admin_col_avatar'))}">
+        <div class="avatar admin-avatar-edit" data-admin-avatar="${u.id}" data-avatar-has="${u.avatar ? 1 : 0}" title="${esc(t('avatar'))}">${avatarHTML}</div>
+      </td>
+      <td data-label="${esc(t('admin_col_username'))}"><span class="uname">${esc(u.username)}</span></td>
+      <td data-label="${esc(t('admin_col_role'))}">${roleTag}</td>
+      <td data-label="${esc(t('admin_col_status'))}">${statusDot}</td>
+      <td data-label="${esc(t('admin_col_model'))}"><select class="user-model-select" data-combo data-user="${u.id}">${opts}</select></td>
+      <td data-label="${esc(t('admin_col_usage'))}"><div class="uusage">${esc(t('admin_today', u.used_today, u.daily_quota))}</div></td>
+      <td data-label="${esc(t('admin_col_actions'))}">
+        <div class="td-actions">
+          <button class="btn-ghost admin-action" data-quota="${u.id}" data-quota-val="${u.daily_quota}" data-uname="${esc(u.username)}">${esc(t('admin_edit_quota'))}</button>
+          <button class="btn-ghost admin-action" data-resetpw="${u.id}" data-uname="${esc(u.username)}">${esc(t('admin_resetpw'))}</button>
+          <button class="btn-ghost admin-action" data-resetquota="${u.id}">${esc(t('admin_reset_quota'))}</button>
+          <button class="btn-ghost admin-action" data-toggle-active="${u.id}" data-active="${u.active ? 1 : 0}" ${isSelf ? 'disabled title="' + esc(t('admin_self_deactivate')) + '"' : ''}>${u.active ? esc(t('admin_deactivate')) : esc(t('admin_activate'))}</button>
+          ${u.username !== 'admin' ? `<button class="icon-btn danger" data-del-user="${u.id}" title="${esc(t('admin_user_deleted'))}" aria-label="Delete ${esc(u.username)}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>` : ''}
         </div>
-      </div>
-      ${u.username !== 'admin' ? `<button class="icon-btn danger" data-del-user="${u.id}" title="${esc(t('admin_user_deleted'))}" aria-label="Delete ${esc(u.username)}">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-      </button>` : ''}
-    </div>`;
-  }).join('');
+      </td>
+    </tr>`;
+  }).join('')}
+    </tbody>
+  </table>`;
+  enhanceModelSelects();
 }
 
-// admin actions: reset password & toggle active (delegated)
 $('#admin-users').addEventListener('click', async (e) => {
   const resetBtn = e.target.closest('[data-resetpw]');
   if (resetBtn) {
@@ -1167,6 +1843,11 @@ $('#admin-users').addEventListener('click', async (e) => {
     const data = await r.json();
     if (!r.ok) { toast(terr(data.error), 'error'); return; }
     toast(t('admin_pw_reset_ok'), 'success');
+    return;
+  }
+  const quotaEditBtn = e.target.closest('[data-quota]');
+  if (quotaEditBtn) {
+    openQuotaModal(Number(quotaEditBtn.dataset.quota), quotaEditBtn.dataset.uname, quotaEditBtn.dataset.quotaVal);
     return;
   }
   const quotaBtn = e.target.closest('[data-resetquota]');
@@ -1209,6 +1890,104 @@ $('#global-model-save').addEventListener('click', async () => {
   toast(t('model_changed', model), 'success');
 });
 
+$('#token-save').addEventListener('click', async () => {
+  const r = await fetch('/api/admin/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      history_token_budget: Number($('#set-hist-budget').value),
+      max_reply_tokens: Number($('#set-max-reply').value),
+      memory_enabled: $('#set-memory-enabled').checked,
+      timeout_ms: Number($('#set-timeout').value)
+    })
+  });
+  const data = await r.json();
+  if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
+  toast(t('token_saved'), 'success');
+});
+
+$('#token-reset').addEventListener('click', async () => {
+  const body = {
+    history_token_budget: 1600,
+    max_reply_tokens: 1024,
+    timeout_ms: 120,
+    memory_enabled: true
+  };
+  const r = await fetch('/api/admin/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json();
+  if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
+  $('#set-hist-budget').value = 1600;
+  $('#set-max-reply').value = 1024;
+  $('#set-timeout').value = 120;
+  $('#set-memory-enabled').checked = true;
+  toast(t('token_reset'), 'success');
+});
+
+let pendingResetAll = false;
+$('#admin-reset-usage').addEventListener('click', () => {
+  $('#confirm-title').textContent = t('admin_reset_all');
+  $('#confirm-text').textContent = t('admin_reset_all_confirm');
+  $('#confirm-ok').textContent = t('admin_reset_all');
+  $('#modal-confirm').classList.add('active');
+  pendingResetAll = true;
+  $('#confirm-ok').focus();
+});
+
+// ---------- admin: AI Assistant avatar (global via server settings) ----------
+function renderAdminAI() {
+  const el = $('#admin-ai-avatar-preview');
+  if (!el) return;
+  const stored = (currentUser && currentUser.assistant_avatar) || null;
+  if (stored) {
+    el.innerHTML = `<img src="${esc(stored)}" alt="">`;
+  } else {
+    el.textContent = 'AI';
+  }
+}
+$('#admin-ai-avatar-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const dataUrl = await fileToDataURL(file, 300000);
+    const r = await fetch('/api/admin/assistant-avatar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ avatar: dataUrl })
+    });
+    const data = await r.json();
+    if (!r.ok) { toast(terr(data.error), 'error'); return; }
+    currentUser.assistant_avatar = data.avatar;
+    renderAdminAI();
+    document.dispatchEvent(new CustomEvent('tt:ai-avatar', { detail: data.avatar }));
+    toast(t('avatar_pick'), 'success');
+  } catch (err) {
+    toast(err.message || t('err_generic'), 'error');
+  }
+  e.target.value = '';
+});
+$('#admin-ai-avatar-reset').addEventListener('click', async () => {
+  const r = await fetch('/api/admin/assistant-avatar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ avatar: null })
+  });
+  const data = await r.json();
+  if (!r.ok) { toast(terr(data.error), 'error'); return; }
+  currentUser.assistant_avatar = null;
+  renderAdminAI();
+  document.dispatchEvent(new CustomEvent('tt:ai-avatar', { detail: null }));
+  toast(t('avatar_remove'), 'success');
+});
+
+document.addEventListener('tt:ai-avatar', () => {
+  renderMessages(lastRendered);
+});
+
+// ---------- admin: user rows (delegated) ----------
 $('#admin-users').addEventListener('change', async (e) => {
   const sel = e.target.closest('.user-model-select');
   if (!sel) return;
@@ -1225,6 +2004,74 @@ $('#admin-users').addEventListener('change', async (e) => {
 });
 
 $('#admin-users').addEventListener('click', async (e) => {
+  const avatarBtn = e.target.closest('[data-admin-avatar]');
+  if (avatarBtn) {
+    const userId = Number(avatarBtn.dataset.adminAvatar);
+    const hasAvatar = avatarBtn.dataset.avatarHas === '1';
+    e.stopPropagation();
+    const rect = avatarBtn.getBoundingClientRect();
+    const pop = document.createElement('div');
+    pop.className = 'avatar-popover';
+    pop.style.top = `${rect.bottom + 6}px`;
+    pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 200))}px`;
+    pop.innerHTML = `
+      <div class="avatar-popover-title">${esc(t('admin_avatar_title'))}</div>
+      <button class="avatar-popover-btn" data-act="upload">${ICON_UPLOAD}<span>${esc(t('admin_avatar_upload_label'))}</span></button>
+      ${hasAvatar ? `<button class="avatar-popover-btn danger" data-act="reset">${ICON_TRASH}<span>${esc(t('admin_avatar_reset_label'))}</span></button>` : ''}
+      <button class="avatar-popover-btn muted" data-act="cancel">${ICON_X}<span>${esc(t('admin_avatar_cancel'))}</span></button>
+    `;
+    document.body.appendChild(pop);
+    setTimeout(() => pop.classList.add('open'), 20);
+    const closePop = () => { pop.remove(); document.removeEventListener('click', onDocClick); };
+    const onDocClick = (ev) => { if (!pop.contains(ev.target) && ev.target !== avatarBtn) closePop(); };
+    setTimeout(() => document.addEventListener('click', onDocClick), 0);
+    pop.querySelectorAll('.avatar-popover-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const act = btn.dataset.act;
+        closePop();
+        if (act === 'cancel') return;
+        if (act === 'reset') {
+          const r = await fetch('/api/admin/avatar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, avatar: null }) });
+          const data = await r.json();
+          if (!r.ok) { toast(terr(data.error), 'error'); return; }
+          if (userId === (currentUser && currentUser.id)) {
+            currentUser.avatar = null;
+            renderSideAvatar();
+            renderMessages(lastRendered);
+            if ($('#modal-settings').classList.contains('active')) renderSettingsAvatar();
+          }
+          toast(t('admin_avatar_reset'), 'success');
+          await loadAdminUsers();
+          return;
+        }
+        if (act === 'upload') {
+          const fileInput = document.createElement('input');
+          fileInput.type = 'file';
+          fileInput.accept = 'image/*';
+          fileInput.onchange = async () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+            try {
+              const dataUrl = await fileToDataURL(file, 300000);
+              const r = await fetch('/api/admin/avatar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, avatar: dataUrl }) });
+              const data = await r.json();
+              if (!r.ok) { toast(terr(data.error), 'error'); return; }
+              if (userId === (currentUser && currentUser.id)) {
+                currentUser.avatar = dataUrl;
+                renderSideAvatar();
+                renderMessages(lastRendered);
+                if ($('#modal-settings').classList.contains('active')) renderSettingsAvatar();
+              }
+              toast(t('admin_avatar_uploaded'), 'success');
+              await loadAdminUsers();
+            } catch (err) { toast(err.message || t('err_generic'), 'error'); }
+          };
+          fileInput.click();
+        }
+      });
+    });
+    return;
+  }
   const btn = e.target.closest('[data-del-user]');
   if (!btn) return;
   if (!confirm(t('confirm_title'))) return;
@@ -1268,24 +2115,21 @@ $('#btn-settings').addEventListener('click', async () => {
   $('#settings-username').textContent = t('settings_as', currentUser.username);
   renderSettingsAvatar();
   renderWallpaperPresets();
+  renderMemoryFacts();
 });
 
 $('#settings-close').addEventListener('click', () => $('#modal-settings').classList.remove('active'));
 
 function renderSettingsAvatar() {
   const el = $('#settings-avatar-preview');
-  if (currentUser.avatar) {
-    el.innerHTML = `<img src="${esc(currentUser.avatar)}" style="width:100%; height:100%; object-fit:cover;" alt="">`;
-  } else {
-    el.textContent = currentUser.username.slice(0, 1).toUpperCase();
+  if (el) {
+    if (currentUser.avatar) {
+      el.innerHTML = `<img src="${esc(currentUser.avatar)}" alt="">`;
+    } else {
+      el.textContent = currentUser.username.slice(0, 1).toUpperCase();
+    }
   }
-  // also update sidebar avatar
-  const side = $('#avatar-init');
-  if (currentUser.avatar) {
-    side.innerHTML = `<img src="${esc(currentUser.avatar)}" style="width:100%; height:100%; object-fit:cover; border-radius:50%;" alt="">`;
-  } else {
-    side.textContent = currentUser.username.slice(0, 1).toUpperCase();
-  }
+  renderSideAvatar();
 }
 
 function fileToDataURL(file, maxSize) {
@@ -1322,7 +2166,8 @@ $('#avatar-file').addEventListener('change', async (e) => {
     if (!r.ok) { toast(terr(data.error), 'error'); return; }
     currentUser.avatar = dataUrl;
     renderSettingsAvatar();
-    toast('Avatar diperbarui', 'success');
+    renderMessages(lastRendered);
+    toast(t('admin_avatar_uploaded'), 'success');
   } catch (err) { toast(terr(err.message), 'error'); }
   e.target.value = '';
 });
@@ -1336,6 +2181,7 @@ $('#avatar-remove').addEventListener('click', async () => {
   if (!r.ok) { toast(terr('ERR_GENERIC'), 'error'); return; }
   currentUser.avatar = null;
   renderSettingsAvatar();
+  renderMessages(lastRendered);
   toast(t('avatar_remove') + ' ✓', 'success');
 });
 
@@ -1378,7 +2224,6 @@ async function applyWallpaper() {
   } else {
     msgArea.style.background = '';
   }
-  // mark active preset
   const box = $('#wallpaper-presets');
   box.dataset.current = data.wallpaper || '';
   const activePreset = WALLPAPER_PRESETS.find(p => p.value === data.wallpaper);
@@ -1443,12 +2288,14 @@ $('#wallpaper-reset').addEventListener('click', async () => {
   await applyWallpaper();
 });
 
-// escape closes modals (R-32)
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     $('#modal-confirm').classList.remove('active');
     $('#modal-admin').classList.remove('active');
     $('#modal-logout').classList.remove('active');
+    $('#modal-rename').classList.remove('active');
+    $('#modal-quota').classList.remove('active');
+    closeModelCombo();
   }
 });
 
@@ -1461,7 +2308,7 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 // ---------- boot ----------
-console.log('[TT] app v1.1.3 fresh-load');
+console.log('[TT] app v1.0-beta fresh-load');
 (async () => {
   let user = null;
   try {
@@ -1469,7 +2316,6 @@ console.log('[TT] app v1.1.3 fresh-load');
     if (r.ok) user = await r.json();
   } catch(e) { console.warn('boot /api/me:', e); }
 
-  // reveal correct view BEFORE heavy init (no flash)
   if (user) {
     currentUser = user;
     $('#app-view').classList.add('ready', 'active');
@@ -1478,6 +2324,7 @@ console.log('[TT] app v1.1.3 fresh-load');
   }
 
   try { applyI18N(); } catch(e) { console.warn('i18n boot:', e); }
+  try { enhanceModelSelects(); } catch(e) { console.warn('combo boot:', e); }
   try { applyTempUI(); } catch(e) { console.warn('temp boot:', e); }
 
   if (user) await enterApp();

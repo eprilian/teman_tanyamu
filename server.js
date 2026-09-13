@@ -3,9 +3,12 @@ const express = require('express');
 const Database = require('better-sqlite3');
 const crypto = require('crypto');
 const path = require('path');
+const dns = require('node:dns/promises');
 
-const ROUTER_BASE = process.env.ROUTER_BASE || 'http://localhost:20128/v1';
-const ROUTER_KEY = process.env.ROUTER_KEY || 'sk-a777cdb383c7ae1c-xgfpfa-f8512e83';
+// Model gateway config lives in the settings table (editable in Admin Dashboard).
+// Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
+const ROUTER_BASE_FALLBACK = process.env.ROUTER_BASE || '';
+const ROUTER_KEY_FALLBACK = process.env.ROUTER_KEY || '';
 const PORT = process.env.PORT || 3000;
 const SESSION_DAYS = 7;
 const DAILY_QUOTA_DEFAULT = 50;
@@ -62,6 +65,18 @@ CREATE TABLE IF NOT EXISTS settings (
 try { db.exec('ALTER TABLE users ADD COLUMN model_override TEXT'); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN avatar TEXT'); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1'); } catch (_) {}
+try { db.exec('ALTER TABLE chats ADD COLUMN lean INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE chats ADD COLUMN summary TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE chats ADD COLUMN summary_upto_id INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE usage ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE usage ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+db.exec(`CREATE TABLE IF NOT EXISTS memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'auto',
+  updated_at TEXT DEFAULT (datetime('now'))
+);`);
 
 // seed admin
 if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
@@ -153,14 +168,57 @@ function checkQuota(user) {
   return { ok: true, used, quota: user.daily_quota };
 }
 
-function bumpUsage(user, tokens) {
-  db.prepare('INSERT INTO usage (user_id, date, request_count, tokens_used) VALUES (?, ?, 1, ?) ON CONFLICT(user_id, date) DO UPDATE SET request_count = request_count + 1, tokens_used = tokens_used + ?').run(user.id, today(), tokens, tokens);
+function bumpUsage(user, tokens, promptTokens, completionTokens) {
+  const p = promptTokens || 0, c = completionTokens || 0;
+  db.prepare(`INSERT INTO usage (user_id, date, request_count, tokens_used, prompt_tokens, completion_tokens) VALUES (?, ?, 1, ?, ?, ?)
+    ON CONFLICT(user_id, date) DO UPDATE SET request_count = request_count + 1, tokens_used = tokens_used + excluded.tokens_used, prompt_tokens = prompt_tokens + excluded.prompt_tokens, completion_tokens = completion_tokens + excluded.completion_tokens`)
+    .run(user.id, today(), tokens, p, c);
+}
+
+// ---------- model gateway (base URL + API key) ----------
+function getRouterBase() {
+  return getSetting('router_base') || ROUTER_BASE_FALLBACK;
+}
+function getRouterKey() {
+  return getSetting('router_key') || ROUTER_KEY_FALLBACK;
+}
+function maskKey(k) {
+  if (!k) return '';
+  if (k.length <= 10) return '****';
+  return k.slice(0, 6) + '…' + k.slice(-4);
+}
+// SSRF guard: block link-local/metadata addresses; localhost & LAN allowed (self-hosted gateway)
+const BLOCKED_V4 = [/^169\.254\./, /^0\./];
+async function isBlockedHost(host) {
+  if (/^\[?[fF][c-d][0-9a-fA-F:]*\]?$/.test(host)) return true;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return BLOCKED_V4.some(re => re.test(host));
+  if (/^[0-9a-fA-F:]*:[0-9a-fA-F:]*$/.test(host)) return /^\[?(fe80|fc|fd|::1)/i.test(host);
+  try {
+    const addrs = await dns.lookup(host, { all: true });
+    return addrs.some(a => BLOCKED_V4.some(re => re.test(a.address)) || /^(fe80|fc|fd)/i.test(a.address));
+  } catch (_) { return false; }
+}
+// returns null if ok, else ERR_* code
+async function validateRouterBase(v) {
+  if (typeof v !== 'string' || !v.trim()) return 'ERR_BASE_REQUIRED';
+  let u;
+  try { u = new URL(v.trim()); } catch (_) { return 'ERR_BASE_INVALID'; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'ERR_BASE_INVALID';
+  if (!u.hostname) return 'ERR_BASE_INVALID';
+  if (await isBlockedHost(u.hostname)) return 'ERR_BASE_BLOCKED_HOST';
+  return null;
+}
+function routerConfigured() {
+  return Boolean(getRouterBase() && getRouterKey());
 }
 
 async function routerFetch(pathname, opts = {}) {
-  return fetch(ROUTER_BASE + pathname, {
+  const base = getRouterBase();
+  const key = getRouterKey();
+  if (!base || !key) { const e = new Error('router-not-configured'); e.code = 'ERR_ROUTER_NOT_CONFIGURED'; throw e; }
+  return fetch(base + pathname, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + ROUTER_KEY, ...(opts.headers || {}) }
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key, ...(opts.headers || {}) }
   });
 }
 
@@ -190,10 +248,153 @@ function setSetting(key, value) {
 function sanitizeMessage(msg) {
   const out = msg
     .replace(/[^\s]*\.(jpe?g|png|gif|webp|bmp|heic)\b/gi, '')
-    .replace(/Cannot read\s+"[^"]*"[^.]*/gi, '')
+    .replace(/Cannot read\s+"[^"]*"[^. ]*/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
   return out || msg;
+}
+
+// ---------- token saver helpers ----------
+function estTokens(s) { return Math.ceil(String(s || '').length / 4); }
+
+// compress an old message: keep head+tail so code/paste junk shrinks but gist stays
+function compressOld(text) {
+  const t = String(text || '');
+  if (t.length <= 420) return t;
+  return t.slice(0, 200) + '\n…[dipotong hemat token]…\n' + t.slice(-200);
+}
+
+function getSettingInt(key, dflt) {
+  const v = getSetting(key);
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
+
+// model/provider timeout: admin-configurable (default 120s, min 30s, max 600s)
+function getTimeoutMs() {
+  const v = getSetting('timeout_ms');
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 120000;
+  return Math.min(600000, Math.max(30000, Math.round(n) * 1000));
+}
+
+// Build model-bound history under a token budget:
+// - newest messages first, full content within budget
+// - older-but-kept messages compressed (head+tail)
+// - everything before summary_upto_id is represented by the stored summary instead
+function buildHistory(chatId, summaryUptoId, budget) {
+  const rows = db.prepare('SELECT id, role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 200').all(chatId);
+  const kept = [];
+  let used = 0;
+  for (const m of rows) {
+    const cost = estTokens(m.content);
+    if (used + cost > budget) break;
+    kept.push(m);
+    used += cost;
+  }
+  kept.reverse(); // back to chronological
+  return kept.map((m, i) => {
+    const isRecent = i >= kept.length - 6;
+    // older messages: compress long content (head+tail) to save repeated prompt tokens
+    const content = (!isRecent && m.content.length > 420) ? compressOld(m.content) : m.content;
+    return { role: m.role, content };
+  });
+}
+
+// ---------- per-user memory (cross-chat) ----------
+const MEMORY_MAX_FACTS = 20;
+const MEMORY_MAX_CHARS = 2400;
+function memoryEnabled(user) {
+  // global kill-switch (admin), default on
+  return getSetting('memory_enabled') !== '0';
+}
+function getMemoryBlock(user) {
+  if (!memoryEnabled(user)) return '';
+  const rows = db.prepare('SELECT content FROM memories WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(user.id, MEMORY_MAX_FACTS);
+  if (!rows.length) return '';
+  return rows.map(r => '- ' + r.content).join('\n');
+}
+function memorySyncChatId(user) { try { return Number(getSetting('memory_sync_chat') || 0); } catch (_) { return 0; } }
+
+function saveMemoryList(user, facts) {
+  const clean = (Array.isArray(facts) ? facts : [])
+    .map(f => String(f).replace(/\s+/g, ' ').trim().slice(0, 240))
+    .filter(Boolean)
+    .slice(0, MEMORY_MAX_FACTS);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM memories WHERE user_id = ?').run(user.id);
+    const ins = db.prepare('INSERT INTO memories (user_id, content, source) VALUES (?, ?, ?)');
+    for (const f of clean) ins.run(user.id, f, 'auto');
+  });
+  tx();
+  return clean.length;
+}
+
+async function nonStreamChat(model, messages, maxTokens, timeoutMs) {
+  const r = await routerFetch('/chat/completions', {
+    method: 'POST',
+    body: JSON.stringify({ model, messages, stream: false, max_tokens: maxTokens }),
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!r.ok) throw new Error('upstream ' + r.status);
+  const j = await r.json();
+  return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+}
+
+// fire-and-forget background LLM task: never breaks the main reply
+async function bgTask(label, fn) {
+  try { await fn(); } catch (e) { console.error('[bg:' + label + ']', e.message); }
+}
+
+const MEMORY_SYSTEM = 'Kamu adalah modul memori. Dari percakapan, tulis fakta PERSONAL tentang user yang berguna di chat mendatang (nama/ panggilan, oshi/preferensi, proyek, bahasa, gaya jawab, larangan). BUKAN topik chat sementara, BUKAN jawaban asisten. Keluaran: maksimal 20 baris, tiap baris diawali "- " lalu satu fakta singkat (<=200 karakter), bahasa Indonesia. Jika tidak ada fakta baru dari percakapan, kembalikan daftar lama apa adanya.';
+
+function scheduleMemoryUpdate(user, chat, history) {
+  if (!memoryEnabled(user)) return;
+  // throttle: every 6 user turns per user (count stored memories' implicit turns via usage of bg flag)
+  const turns = db.prepare('SELECT COUNT(*) c FROM messages WHERE chat_id = ? AND role = ?').get(chat.id, 'user').c;
+  const last = Number(getSetting('memory:last:' + user.id) || 0);
+  if (turns - last < 6) return;
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('memory:last:' + user.id, String(turns));
+  const recent = history.slice(-12).map(m => (m.role === 'user' ? 'USER' : 'AI') + ': ' + m.content.slice(0, 400)).join('\n');
+  const existing = getMemoryBlock(user);
+  const task = async () => {
+    const out = await nonStreamChat(resolveUserModel(user), [
+      { role: 'system', content: MEMORY_SYSTEM },
+      { role: 'user', content: 'DAFTAR MEMORI LAMA:\n' + (existing || '(kosong)') + '\n\nPERCAKAPAN TERAKHIR:\n' + recent + '\n\nTulis daftar memori final (gabungkan, hapus yang kadaluarsa/kontradiktif, maksimal 20 baris "- "):' }
+    ], 500, 60000);
+    const facts = out.split('\n').map(l => l.replace(/^[-*•\d.\s]+/, '').trim()).filter(l => l && l.length > 6);
+    if (facts.length) saveMemoryList(user, facts);
+  };
+  bgTask('memory', task);
+}
+
+const SUMMARY_SYSTEM = 'Ringkas percakapan lama ke dalam catatan konteks padat (maks 1200 karakter) yang menyatukan ringkasan lama + pesan baru. Simpan: topik, keputusan, fakta, tugas belum selesai, preferensi gaya. Bahasa Indonesia. Keluaran hanya ringkasan, tanpa preamble.';
+
+function scheduleSummary(chat, newUptoId) {
+  const summary = chat.summary || '';
+  const rows = db.prepare('SELECT id, role, content FROM messages WHERE chat_id = ? AND id > ? ORDER BY id LIMIT 100').all(chat.id, chat.summary_upto_id || 0);
+  const outside = rows.filter(r => r.id <= newUptoId - 10); // only compress the clearly-old part
+  if (outside.length < 12) return; // not enough to bother
+  const cut = outside[outside.length - 1].id;
+  const lines = outside.map(r => (r.role === 'user' ? 'USER' : 'AI') + ': ' + compressOld(r.content).slice(0, 500)).join('\n');
+  const task = async () => {
+    const out = await nonStreamChat(chat.model, [
+      { role: 'system', content: SUMMARY_SYSTEM },
+      { role: 'user', content: 'RINGKASAN LAMA:\n' + (summary || '(belum ada)') + '\n\nPERCAKAPAN LAMA YANG HARUS DIMASUKKAN:\n' + lines + '\n\nRingkasan final:' }
+    ], 400, 60000);
+    if (out && out.trim()) {
+      db.prepare('UPDATE chats SET summary = ?, summary_upto_id = ? WHERE id = ?').run(out.trim().slice(0, 2400), cut, chat.id);
+    }
+  };
+  bgTask('summary', task);
+}
+
+function buildSystemPrompt(user, chat) {
+  const parts = ['Kamu asisten AI pribadi di app ringan. Jawab relevan, hemat, dalam bahasa user (default Indonesia).'];
+  const mem = getMemoryBlock(user);
+  if (mem) parts.push('MEMORI TENTANG USER (ingat lintas chat, jangan sebut modul ini kecuali ditanya):\n' + mem);
+  if (chat.summary) parts.push('RINGKASAN POBROLAN SEBELUMNYA DI CHAT INI:\n' + chat.summary);
+  return parts.join('\n\n');
 }
 
 // ---------- auth ----------
@@ -275,6 +476,7 @@ app.get('/api/me', requireAuth, (req, res) => {
   const q = checkQuota(req.user);
   const usedRow = db.prepare('SELECT request_count FROM usage WHERE user_id = ? AND date = ?').get(req.user.id, today());
   res.json({
+    id: req.user.id,
     username: req.user.username,
     role: req.user.role,
     quota_used: usedRow ? usedRow.request_count : 0,
@@ -282,7 +484,8 @@ app.get('/api/me', requireAuth, (req, res) => {
     effective_model: resolveUserModel(req.user),
     model_override: req.user.model_override,
     global_model: getGlobalModel(),
-    avatar: req.user.avatar || null
+    avatar: req.user.avatar || null,
+    assistant_avatar: getSetting('assistant_avatar') || null
   });
 });
 
@@ -321,7 +524,7 @@ app.delete('/api/me/model', requireAuth, requireAdmin, (req, res) => {
 
 // ---------- chats ----------
 app.get('/api/chats', requireAuth, (req, res) => {
-  res.json(db.prepare('SELECT id, title, model, updated_at FROM chats WHERE user_id = ? ORDER BY updated_at DESC').all(req.user.id));
+  res.json(db.prepare('SELECT id, title, model, updated_at, lean, (summary IS NOT NULL AND summary != \'\') AS has_summary FROM chats WHERE user_id = ? ORDER BY updated_at DESC').all(req.user.id));
 });
 
 app.post('/api/chats', requireAuth, (req, res) => {
@@ -359,12 +562,13 @@ app.patch('/api/chats/:id', requireAuth, (req, res) => {
 
 // ---------- models ----------
 app.get('/api/models', requireAuth, async (req, res) => {
+  if (!routerConfigured()) return res.status(503).json({ error: 'ERR_ROUTER_NOT_CONFIGURED' });
   try {
     const r = await routerFetch('/models');
     const data = await r.json();
     res.json(data.data.map(m => m.id));
   } catch (e) {
-    res.status(502).json({ error: 'ERR_ROUTER_DOWN' });
+    res.status(502).json({ error: e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code : 'ERR_ROUTER_DOWN' });
   }
 });
 
@@ -403,7 +607,13 @@ app.post('/api/chat', requireAuth, async (req, res) => {
   if (!quota.ok) return res.status(429).json({ error: 'ERR_QUOTA' });
 
   const cleanMessage = sanitizeMessage(message.trim());
-  const history = db.prepare('SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 10').all(chat.id).reverse();
+
+  // --- token-saving context builder ---
+  const HISTORY_BUDGET = getSettingInt('history_token_budget', 1600); // ~window lama, tapi berdasarkan token
+  const MAX_REPLY_TOKENS = getSettingInt('max_reply_tokens', 1024);  // cap output
+  const lean = !!chat.lean;
+  const history = lean ? [] : buildHistory(chat.id, chat.summary_upto_id || 0, HISTORY_BUDGET);
+  const systemPrompt = buildSystemPrompt(req.user, chat);
 
   db.prepare('INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)').run(chat.id, 'user', cleanMessage);
   if (chat.title === 'New Chat' || chat.title === 'Chat baru') {
@@ -417,14 +627,21 @@ app.post('/api/chat', requireAuth, async (req, res) => {
 
   let aiReply = '';
   let tokens = 0;
+  let promptTokens = 0;
+  let completionTokens = 0;
   let aborted = false;
   res.on('close', () => { if (!res.writableEnded) aborted = true; });
 
   try {
     const upstream = await routerFetch('/chat/completions', {
       method: 'POST',
-      body: JSON.stringify({ model: chat.model, messages: [...history, { role: 'user', content: cleanMessage }], stream: true }),
-      signal: AbortSignal.timeout(120000)
+      body: JSON.stringify({
+        model: chat.model,
+        messages: [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: cleanMessage }],
+        stream: true,
+        max_tokens: MAX_REPLY_TOKENS
+      }),
+      signal: AbortSignal.timeout(getTimeoutMs())
     });
 
     if (!upstream.ok) {
@@ -462,7 +679,11 @@ app.post('/api/chat', requireAuth, async (req, res) => {
             }
             res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
           }
-          if (chunk.usage) tokens = (chunk.usage.total_tokens || tokens);
+          if (chunk.usage) {
+            tokens = (chunk.usage.total_tokens || tokens);
+            promptTokens = chunk.usage.prompt_tokens || promptTokens;
+            completionTokens = chunk.usage.completion_tokens || completionTokens;
+          }
         } catch (_) {}
       }
     }
@@ -470,23 +691,67 @@ app.post('/api/chat', requireAuth, async (req, res) => {
     if (aiReply) {
       db.prepare('INSERT INTO messages (chat_id, role, content, tokens) VALUES (?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens);
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chat.id);
-      bumpUsage(req.user, tokens);
+      bumpUsage(req.user, tokens, promptTokens, completionTokens);
+      // background: refresh rolling summary + cross-chat memory (lean mode = no context, skip both)
+      if (!lean) {
+        const uptoId = db.prepare('SELECT MAX(id) m FROM messages WHERE chat_id = ?').get(chat.id).m || 0;
+        scheduleSummary(chat, uptoId);
+        scheduleMemoryUpdate(req.user, chat, [...history, { role: 'user', content: cleanMessage }, { role: 'assistant', content: aiReply }]);
+      }
     }
+    res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens } })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
     if (aiReply) {
       db.prepare('INSERT INTO messages (chat_id, role, content, tokens) VALUES (?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens);
-      bumpUsage(req.user, tokens);
+      bumpUsage(req.user, tokens, promptTokens, completionTokens);
     }
-    res.write(`data: ${JSON.stringify({ error: 'Timeout/failed: ' + e.message })}\n\n`);
+    const friendly = e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code
+      : (e.name === 'TimeoutError' || /timed? ?out/i.test(String(e.message || '')))
+        ? 'ERR_TIMEOUT'
+        : ('9Router/failed: ' + (e.message || 'unknown error')).slice(0, 300);
+    res.write(`data: ${JSON.stringify({ error: friendly })}\n\n`);
     res.end();
   }
 });
 
+// ---------- per-chat lean (hemat token) toggle ----------
+app.patch('/api/chats/:id/lean', requireAuth, (req, res) => {
+  const { lean } = req.body || {};
+  if (typeof lean !== 'boolean') return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
+  const chat = db.prepare('SELECT id FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  db.prepare('UPDATE chats SET lean = ? WHERE id = ?').run(lean ? 1 : 0, chat.id);
+  res.json({ ok: true, lean });
+});
+
+// ---------- memory (cross-chat) ----------
+app.get('/api/memory', requireAuth, (req, res) => {
+  const rows = db.prepare('SELECT id, content, source, updated_at FROM memories WHERE user_id = ? ORDER BY id').all(req.user.id);
+  res.json({ facts: rows, enabled: getSetting('memory_enabled') !== '0', max: MEMORY_MAX_FACTS });
+});
+
+app.put('/api/memory', requireAuth, (req, res) => {
+  const { facts } = req.body || {};
+  if (!Array.isArray(facts)) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
+  const n = saveMemoryList(req.user, facts);
+  res.json({ ok: true, count: n });
+});
+
+app.delete('/api/memory/:factId', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM memories WHERE id = ? AND user_id = ?').run(req.params.factId, req.user.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/memory/clear', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM memories WHERE user_id = ?').run(req.user.id);
+  res.json({ ok: true });
+});
+
 // ---------- temp chat (no history saved) ----------
 app.post('/api/temp-chat', requireAuth, async (req, res) => {
-  const { message, model } = req.body || {};
+  const { message, model, lean } = req.body || {};
   if (!message || !message.trim()) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
 
   const quota = checkQuota(req.user);
@@ -504,11 +769,21 @@ app.post('/api/temp-chat', requireAuth, async (req, res) => {
   let aborted = false;
   res.on('close', () => { if (!res.writableEnded) aborted = true; });
 
+  const systemPrompt = buildSystemPrompt(req.user, {});
+  const messages = lean
+    ? [{ role: 'user', content: sanitizeMessage(message.trim()) }]
+    : [{ role: 'system', content: systemPrompt }, { role: 'user', content: sanitizeMessage(message.trim()) }];
+
   try {
     const upstream = await routerFetch('/chat/completions', {
       method: 'POST',
-      body: JSON.stringify({ model: effectiveModel, messages: [{ role: 'user', content: sanitizeMessage(message.trim()) }], stream: true }),
-      signal: AbortSignal.timeout(120000)
+      body: JSON.stringify({
+        model: effectiveModel,
+        messages,
+        stream: true,
+        max_tokens: getSettingInt('max_reply_tokens', 1024)
+      }),
+      signal: AbortSignal.timeout(getTimeoutMs())
     });
 
     if (!upstream.ok) {
@@ -551,7 +826,11 @@ app.post('/api/temp-chat', requireAuth, async (req, res) => {
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
-    res.write(`data: ${JSON.stringify({ error: 'Timeout/failed: ' + e.message })}\n\n`);
+    const friendly = e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code
+      : (e.name === 'TimeoutError' || /timed? ?out/i.test(String(e.message || '')))
+        ? 'ERR_TIMEOUT'
+        : ('9Router/failed: ' + (e.message || 'unknown error')).slice(0, 300);
+    res.write(`data: ${JSON.stringify({ error: friendly })}\n\n`);
     res.end();
   }
 });
@@ -565,14 +844,95 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
-  res.json({ default_model: getGlobalModel() });
+  res.json({
+    default_model: getGlobalModel(),
+    history_token_budget: getSettingInt('history_token_budget', 1600),
+    max_reply_tokens: getSettingInt('max_reply_tokens', 1024),
+    memory_enabled: getSetting('memory_enabled') !== '0',
+    timeout_ms: getTimeoutMs() / 1000,
+    today_usage: db.prepare('SELECT COALESCE(SUM(tokens_used),0) t, COALESCE(SUM(prompt_tokens),0) p, COALESCE(SUM(completion_tokens),0) c FROM usage WHERE date = ?').get(today())
+  });
 });
 
 app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
-  const { default_model } = req.body || {};
-  if (!default_model || typeof default_model !== 'string') return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
-  setSetting('default_model', default_model);
-  res.json({ ok: true, default_model });
+  const { default_model, history_token_budget, max_reply_tokens, memory_enabled, timeout_ms } = req.body || {};
+  if (default_model !== undefined) {
+    if (!default_model || typeof default_model !== 'string') return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
+    setSetting('default_model', default_model);
+  }
+  if (history_token_budget !== undefined) {
+    const n = Number(history_token_budget);
+    if (!Number.isFinite(n) || n < 200 || n > 32000) return res.status(400).json({ error: 'ERR_BAD_BUDGET' });
+    setSetting('history_token_budget', String(Math.round(n)));
+  }
+  if (max_reply_tokens !== undefined) {
+    const n = Number(max_reply_tokens);
+    if (!Number.isFinite(n) || n < 64 || n > 8192) return res.status(400).json({ error: 'ERR_BAD_MAXTOK' });
+    setSetting('max_reply_tokens', String(Math.round(n)));
+  }
+  if (memory_enabled !== undefined) setSetting('memory_enabled', memory_enabled ? '1' : '0');
+  if (timeout_ms !== undefined) {
+    const n = Number(timeout_ms);
+    if (!Number.isFinite(n) || n < 30 || n > 600) return res.status(400).json({ error: 'ERR_BAD_TIMEOUT' });
+    setSetting('timeout_ms', String(Math.round(n)));
+  }
+  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 1024), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000 });
+});
+
+// ---------- admin: model gateway (Open WebUI style: base URL + API key) ----------
+app.get('/api/admin/router-config', requireAuth, requireAdmin, (req, res) => {
+  res.json({
+    base_url: getRouterBase() || '',
+    api_key_masked: maskKey(getRouterKey()),
+    configured: routerConfigured(),
+    source: getSetting('router_base') ? 'database' : (ROUTER_BASE_FALLBACK ? 'env' : 'none')
+  });
+});
+
+app.put('/api/admin/router-config', requireAuth, requireAdmin, async (req, res) => {
+  const { base_url, api_key } = req.body || {};
+  if (base_url !== undefined) {
+    const bad = await validateRouterBase(base_url);
+    if (bad) return res.status(400).json({ error: bad });
+    setSetting('router_base', String(base_url).trim().replace(/\/+$/, ''));
+  }
+  if (api_key !== undefined) {
+    if (api_key === null) {
+      db.prepare('DELETE FROM settings WHERE key = ?').run('router_key');
+    } else {
+      if (typeof api_key !== 'string') return res.status(400).json({ error: 'ERR_BAD_BODY' });
+      const k = api_key.trim();
+      if (k.length > 400) return res.status(400).json({ error: 'ERR_TOO_BIG' });
+      setSetting('router_key', k);
+    }
+  }
+  res.json({ ok: true, base_url: getRouterBase() || '', api_key_masked: maskKey(getRouterKey()), configured: routerConfigured() });
+});
+
+// live connectivity probe: GET {base}/models with saved or posted (pre-save) credentials
+app.post('/api/admin/router-test', requireAuth, requireAdmin, async (req, res) => {
+  const { base_url, api_key } = req.body || {};
+  let base = getRouterBase(), key = getRouterKey();
+  if (base_url !== undefined && String(base_url).trim() !== '') {
+    const bad = await validateRouterBase(base_url);
+    if (bad) return res.status(400).json({ error: bad });
+    base = String(base_url).trim().replace(/\/+$/, '');
+  }
+  if (api_key !== undefined && String(api_key).trim() !== '') key = String(api_key).trim();
+  if (!base || !key) return res.status(400).json({ error: 'ERR_ROUTER_NOT_CONFIGURED' });
+  const t0 = Date.now();
+  try {
+    const r = await fetch(base + '/models', {
+      headers: { 'Authorization': '***' + key },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!r.ok) return res.json({ ok: false, status: r.status, latency_ms: Date.now() - t0, models: 0 });
+    const data = await r.json().catch(() => null);
+    const n = Array.isArray(data && data.data) ? data.data.length : 0;
+    res.json({ ok: true, status: r.status, latency_ms: Date.now() - t0, models: n });
+  } catch (e) {
+    res.status(502).json({ error: (e && e.name === 'TimeoutError') ? 'ERR_TIMEOUT' : 'ERR_ROUTER_DOWN' });
+  }
 });
 
 app.put('/api/admin/wallpaper', requireAuth, requireAdmin, (req, res) => {
@@ -600,6 +960,33 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// admin: change/reset the AI assistant avatar (global, applies to everyone)
+app.post('/api/admin/assistant-avatar', requireAuth, requireAdmin, (req, res) => {
+  const { avatar } = req.body || {};
+  if (avatar !== null) {
+    if (typeof avatar !== 'string' || !WALLPAPER_IMG_RE.test(avatar)) return res.status(400).json({ error: 'ERR_AVATAR_FORMAT' });
+    if (avatar.length > 400000) return res.status(400).json({ error: 'ERR_TOO_BIG' });
+  }
+  setSetting('assistant_avatar', avatar);
+  res.json({ ok: true, avatar });
+});
+
+// admin: change/reset avatar of ANY user (including self)
+app.post('/api/admin/avatar', requireAuth, requireAdmin, (req, res) => {
+  const { userId, avatar } = req.body || {};
+  if (!userId) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
+  const target = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+  if (!target) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  if (avatar !== null) {
+    if (typeof avatar !== 'string' || !WALLPAPER_IMG_RE.test(avatar)) return res.status(400).json({ error: 'ERR_AVATAR_FORMAT' });
+    if (avatar.length > 400000) return res.status(400).json({ error: 'ERR_TOO_BIG' });
+  }
+  db.prepare('UPDATE users SET avatar = ? WHERE id = ?').run(avatar, userId);
+  if (Number(userId) === req.user.id) req.user.avatar = avatar || null;
+  res.json({ ok: true, avatar });
+});
+
+// admin: reset password / activate user
 app.put('/api/admin/users/:id/password', requireAuth, requireAdmin, (req, res) => {
   const { password } = req.body || {};
   if (!password || String(password).length < 4) return res.status(400).json({ error: 'ERR_PW_SHORT' });
@@ -612,6 +999,7 @@ app.put('/api/admin/users/:id/password', requireAuth, requireAdmin, (req, res) =
 app.put('/api/admin/users/:id/active', requireAuth, requireAdmin, (req, res) => {
   const { active } = req.body || {};
   if (typeof active !== 'boolean') return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
+  // never allow deactivating yourself (or any admin) — keep at least one active admin
   if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: 'ERR_SELF_DEACTIVATE' });
   if (!db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
   db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
@@ -622,6 +1010,21 @@ app.put('/api/admin/users/:id/active', requireAuth, requireAdmin, (req, res) => 
 app.put('/api/admin/users/:id/reset-quota', requireAuth, requireAdmin, (req, res) => {
   if (!db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
   db.prepare('DELETE FROM usage WHERE user_id = ? AND date = ?').run(req.params.id, today());
+  res.json({ ok: true });
+});
+
+// set a user's daily quota
+app.put('/api/admin/users/:id/quota', requireAuth, requireAdmin, (req, res) => {
+  const n = Math.floor(Number((req.body || {}).daily_quota));
+  if (!Number.isFinite(n) || n < 1 || n > 999999) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
+  if (!db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  db.prepare('UPDATE users SET daily_quota = ? WHERE id = ?').run(n, req.params.id);
+  res.json({ ok: true, daily_quota: n });
+});
+
+// reset ALL usage (every user, every date) — admin only
+app.put('/api/admin/reset-usage', requireAuth, requireAdmin, (req, res) => {
+  db.prepare('DELETE FROM usage').run();
   res.json({ ok: true });
 });
 
