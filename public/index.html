@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teman Tanyamu</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="stylesheet" href="/style.css?v=1.0-beta.5">
+<link rel="stylesheet" href="/style.css?v=1.0-beta.7">
 </head>
 <body>
 
@@ -29,6 +29,10 @@
       <div class="login-error" id="login-error" role="alert"></div>
       <button type="submit" class="login-btn" id="login-btn-el">Sign in</button>
     </form>
+    <button type="button" class="guest-btn" id="btn-guest" hidden>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <span id="guest-btn-label">Try as guest</span>
+    </button>
   </div>
   <div class="login-foot" id="login-foot-el">Teman Tanyamu · your personal AI assistant</div>
 </div>
@@ -110,6 +114,18 @@
         </button>
       </div>
       <div class="composer-hint"><span class="hint-inner" id="hint-inner-el">Teman Tanyamu can make mistakes. Check important info.</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: guest -> login prompt -->
+<div class="modal-backdrop" id="modal-guest">
+  <div class="modal">
+    <h3 id="guest-modal-title">Waktu guest habis</h3>
+    <p class="modal-sub" id="guest-modal-text"></p>
+    <div class="row">
+      <button class="btn-ghost" id="guest-later">Later</button>
+      <button class="btn-primary" id="guest-login-now">Sign in</button>
     </div>
   </div>
 </div>
@@ -218,6 +234,32 @@
       </label>
     </div>
     <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
+    <h3 style="font-size:13.5px;" id="admin-guest-title">Guest Mode</h3>
+    <div class="setting-row">
+      <div class="setting-row-main">
+        <span id="lbl-guest-enabled" class="setting-row-title">Allow guest access</span>
+        <span id="lbl-guest-enabled-sub" class="setting-row-sub">Show "Try as guest" button on login page</span>
+      </div>
+      <label class="owui-switch" for="set-guest-enabled" title="Toggle">
+        <input type="checkbox" id="set-guest-enabled">
+        <span class="owui-slider"></span>
+      </label>
+    </div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+      <div>
+        <label for="set-guest-chats" id="lbl-guest-chats">Max messages per guest</label>
+        <input id="set-guest-chats" type="number" value="10" min="1" max="200" step="1">
+      </div>
+      <div>
+        <label for="set-guest-minutes" id="lbl-guest-minutes">Session time (minutes)</label>
+        <input id="set-guest-minutes" type="number" value="5" min="1" max="720" step="1">
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button class="btn-primary" id="guest-save" style="flex:1; padding:9px 15px; border-radius:9px; font-size:13px; font-weight:500;">Save</button>
+      <button class="btn-ghost" id="guest-reset" style="padding:9px 15px; border-radius:9px; font-size:13px;">Reset</button>
+    </div>
+    <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
     <h3 style="font-size:13.5px;" id="admin-add-title">Add User</h3>
     <form id="form-add-user">
       <label for="add-username" id="lbl-add-username">Username</label>
@@ -308,6 +350,6 @@
 
 <div id="toast" role="status"></div>
 
-<script src="/app.js?v=1.0-beta.5"></script>
+<script src="/app.js?v=1.0-beta.7"></script>
 </body>
 </html>

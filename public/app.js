@@ -87,6 +87,23 @@ const I18N = {
     router_source_none: 'none',
     router_test_btn: 'Test',
     router_save_btn: 'Save',
+    guest_btn: 'Try as guest',
+    guest_title: 'Guest access ended',
+    guest_text_chats: 'You have used all guest messages. Sign in to keep chatting — your chats stay on this device until you log out.',
+    guest_text_time: 'The guest session time is up. Sign in to continue the conversation.',
+    guest_later: 'Later',
+    guest_login_now: 'Sign in now',
+    guest_quota: (u, m) => `Guest — ${u}/${m} messages`,
+    guest_time: (mm) => ` · ${mm} left`,
+    guest_saved: 'Guest settings saved',
+    guest_reset_done: 'Guest settings reset to defaults',
+    guest_enabled_lbl: 'Allow guest access',
+    guest_enabled_sub: 'Show "Try as guest" button on login page',
+    guest_max_chats_lbl: 'Max messages per guest',
+    guest_minutes_lbl: 'Session time (minutes)',
+    guest_admin_title: 'Guest Mode',
+    guest_ended_toast: 'Guest limit reached — please sign in',
+    reset_btn: 'Reset',
     today_usage: (t, p, c) => `today ${t} tokens (prompt ${p} / reply ${c})`,
     aria_sidebar: 'Toggle chat list',
     aria_new_chat: 'New chat',
@@ -295,6 +312,23 @@ const I18N = {
     router_source_none: 'kosong',
     router_test_btn: 'Uji',
     router_save_btn: 'Simpan',
+    guest_btn: 'Coba sebagai tamu',
+    guest_title: 'Akses tamu berakhir',
+    guest_text_chats: 'Kuota pesan tamu sudah habis. Masuk untuk lanjut ngobrol — chat tetap tersimpan di perangkat ini sampai kamu logout.',
+    guest_text_time: 'Waktu sesi tamu sudah habis. Masuk untuk melanjutkan percakapan.',
+    guest_later: 'Nanti',
+    guest_login_now: 'Masuk sekarang',
+    guest_quota: (u, m) => `Tamu — ${u}/${m} pesan`,
+    guest_time: (mm) => ` · sisa ${mm}`,
+    guest_saved: 'Pengaturan tamu disimpan',
+    guest_reset_done: 'Pengaturan tamu direset ke bawaan',
+    guest_enabled_lbl: 'Izinkan akses tamu',
+    guest_enabled_sub: 'Tampilkan tombol "Coba sebagai tamu" di halaman login',
+    guest_max_chats_lbl: 'Maks pesan per tamu',
+    guest_minutes_lbl: 'Durasi sesi (menit)',
+    guest_admin_title: 'Mode Tamu',
+    guest_ended_toast: 'Kuota tamu habis — silakan masuk',
+    reset_btn: 'Atur Ulang',
     today_usage: (t, p, c) => `hari ini ${t} token (prompt ${p} / balasan ${c})`,
     aria_sidebar: 'Buka daftar chat',
     aria_new_chat: 'Chat baru',
@@ -431,6 +465,12 @@ const ERR_MAP = {
   ERR_BASE_REQUIRED: { en: 'Base URL is required', id: 'Base URL wajib diisi' },
   ERR_BASE_INVALID: { en: 'Invalid URL — use http:// or https:// with a valid address', id: 'URL tidak valid — gunakan http:// atau https:// dengan alamat yang benar' },
   ERR_BASE_BLOCKED_HOST: { en: 'That host is not allowed (metadata/link-local addresses are blocked)', id: 'Host itu tidak diizinkan (alamat metadata/link-local diblokir)' },
+  ERR_GUEST_CHATS: { en: 'Guest message limit reached. Sign in to continue.', id: 'Kuota pesan tamu habis. Masuk untuk melanjutkan.' },
+  ERR_GUEST_TIME: { en: 'Guest session expired. Sign in to continue.', id: 'Sesi tamu berakhir. Masuk untuk melanjutkan.' },
+  ERR_GUEST_DISABLED: { en: 'Guest access is disabled', id: 'Akses tamu sedang dinonaktifkan' },
+  ERR_GUEST_NOPE: { en: 'This feature needs a real account. Sign in first.', id: 'Fitur ini butuh akun asli. Masuk dulu, ya.' },
+  ERR_BAD_GUEST_CHATS: { en: 'Guest max messages must be 1–200', id: 'Maks pesan tamu harus 1–200' },
+  ERR_BAD_GUEST_MINUTES: { en: 'Guest session time must be 1–720 minutes', id: 'Durasi sesi tamu harus 1–720 menit' },
   ERR_INACTIVE: { en: 'Account disabled. Contact admin.', id: 'Akun dinonaktifkan. Hubungi admin.' },
   ERR_PW_SHORT: { en: 'Password must be at least 4 characters', id: 'Password minimal 4 karakter' },
   ERR_OLD_PW: { en: 'Old password is wrong', id: 'Password lama salah' },
@@ -554,6 +594,18 @@ function applyI18N() {
     setT('#admin-reset-usage', t('admin_reset_all'));
     setT('#lbl-memory-enabled', t('memory_enabled_lbl'));
     setT('#lbl-memory-enabled-sub', t('memory_enabled_sub'));
+    setT('#admin-guest-title', t('guest_admin_title'));
+    setT('#lbl-guest-enabled', t('guest_enabled_lbl'));
+    setT('#lbl-guest-enabled-sub', t('guest_enabled_sub'));
+    setT('label[for="set-guest-chats"]', t('guest_max_chats_lbl'));
+    setT('label[for="set-guest-minutes"]', t('guest_minutes_lbl'));
+    setT('#guest-btn-label', t('guest_btn'));
+    setT('#guest-save', t('router_save_btn'));
+    setT('#token-reset', t('reset_btn'));
+    setT('#guest-reset', t('reset_btn'));
+    if (isGuest()) {
+      $('#guest-modal-title').textContent = t('guest_title');
+    }
     applyLeanUI();
     setT('#wallpaper-pick-label', t('wallpaper_upload'));
     setT('#wallpaper-reset', t('wallpaper_reset'));
@@ -694,6 +746,32 @@ window.addEventListener('dragover', (e) => e.preventDefault()); // stop browser 
 })();
 
 // ---------- auth ----------
+let guestAllowed = false;
+async function refreshGuestButton() {
+  const btn = $('#btn-guest'); if (!btn) return;
+  try {
+    const cfg = await (await fetch('/api/guest-config')).json();
+    guestAllowed = !!(cfg && cfg.enabled);
+  } catch (_) { guestAllowed = false; }
+  btn.hidden = !guestAllowed;
+  const lbl = $('#guest-btn-label'); if (lbl) lbl.textContent = t('guest_btn');
+}
+$('#btn-guest').addEventListener('click', async () => {
+  const btn = $('#btn-guest');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/guest', { method: 'POST' });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { $('#login-error').textContent = terr(data.error) || data.error || 'Error'; return; }
+    await enterApp();
+  } catch (e) {
+    $('#login-error').textContent = 'Guest error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+refreshGuestButton();
+
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('#login-error').textContent = '';
@@ -739,6 +817,7 @@ $('#logout-ok').addEventListener('click', async () => {
   $('#modal-logout').classList.remove('active');
   if (abortCtrl) abortCtrl.abort(); // stop stream berjalan
   await fetch('/api/logout', { method: 'POST' });
+  stopGuestTimer();
   currentUser = null;
   currentChatId = null;
   chats = [];
@@ -755,6 +834,7 @@ $('#logout-ok').addEventListener('click', async () => {
   $('#chat-search').value = '';
   $('#messages').innerHTML = '';
   $('#modal-admin').classList.remove('active');
+  refreshGuestButton();
   $('#login-user').focus();
 });
 
@@ -770,6 +850,7 @@ async function enterApp() {
   $('#lbl-user').textContent = currentUser.username;
   renderSideAvatar();
   updateQuota();
+  syncGuestState();
   if (currentUser.role === 'admin') $('#btn-admin').classList.add('show');
   await loadModels();
   await loadChats();
@@ -796,10 +877,103 @@ function updateModelBadge() {
   }
 }
 
+function isGuest() { return !!(currentUser && currentUser.guest); }
+
+let guestCountdownIv = null;
+function fmtMMSS(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+function stopGuestTimer() {
+  if (guestCountdownIv) { clearInterval(guestCountdownIv); guestCountdownIv = null; }
+}
+function startGuestTimer() {
+  stopGuestTimer();
+  if (!isGuest()) return;
+  guestCountdownIv = setInterval(() => {
+    if (!currentUser || !currentUser.guest) { stopGuestTimer(); return; }
+    currentUser.seconds_left = (currentUser.seconds_left || 0) - 1;
+    updateQuota();
+    if (currentUser.seconds_left <= 0) {
+      stopGuestTimer();
+      openGuestModal('time');
+    }
+  }, 1000);
+}
+
+function afterGuestRefresh() {
+  if (!currentUser || !currentUser.guest) return;
+  if (currentUser.expired || currentUser.seconds_left <= 0) openGuestModal('time');
+  else if (currentUser.quota_used >= currentUser.quota_max) openGuestModal('chats');
+}
+function syncGuestState() {
+  if (!currentUser) { stopGuestTimer(); return; }
+  if (!currentUser.guest) { stopGuestTimer(); return; }
+  startGuestTimer();
+  if (currentUser.expired || currentUser.seconds_left <= 0) openGuestModal('time');
+  else if (currentUser.quota_used >= currentUser.quota_max) openGuestModal('chats');
+}
+function handleGuestError(code, box) {
+  if (code !== 'ERR_GUEST_CHATS' && code !== 'ERR_GUEST_TIME') return false;
+  // undo the optimistic user+assistant bubbles: server stored nothing
+  const blocks = box ? [...box.querySelectorAll(':scope .msg-block')] : [];
+  for (let k = 0; k < 2 && blocks.length; k++) {
+    const b = blocks[blocks.length - 1 - k];
+    if (b) b.remove();
+  }
+  openGuestModal(code === 'ERR_GUEST_TIME' ? 'time' : 'chats');
+  return true;
+}
+function openGuestModal(reason) {
+  $('#guest-modal-title').textContent = t('guest_title');
+  $('#guest-modal-text').textContent = reason === 'time' ? t('guest_text_time') : t('guest_text_chats');
+  $('#guest-later').textContent = t('guest_later');
+  $('#guest-login-now').textContent = t('guest_login_now');
+  $('#modal-guest').classList.add('active');
+  $('#guest-login-now').focus();
+}
+function goLoginFromGuest() {
+  $('#modal-guest').classList.remove('active');
+  fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  stopGuestTimer();
+  currentUser = null;
+  currentChatId = null;
+  chats = [];
+  allModelsCache = [];
+  $('#app-view').classList.remove('ready', 'active');
+  $('#btn-admin').classList.remove('show');
+  $('#login-view').style.display = '';
+  $('#login-view').classList.add('ready');
+  $('#login-user').value = '';
+  $('#login-pass').value = '';
+  $('#login-error').textContent = '';
+  $('#model-select').innerHTML = '';
+  $('#chat-list').innerHTML = '';
+  $('#chat-search').value = '';
+  $('#messages').innerHTML = '';
+  $('#modal-admin').classList.remove('active');
+  $('#modal-settings').classList.remove('active');
+  refreshGuestButton();
+  $('#login-user').focus();
+}
+$('#guest-login-now').addEventListener('click', goLoginFromGuest);
+$('#guest-later').addEventListener('click', () => {
+  $('#modal-guest').classList.remove('active');
+  toast(t('guest_ended_toast'), 'error');
+});
+
 function updateQuota() {
   if (!currentUser) return;
   const el = $('#lbl-quota');
   let text;
+  if (currentUser.guest) {
+    text = t('guest_quota', currentUser.quota_used, currentUser.quota_max) + t('guest_time', fmtMMSS(currentUser.seconds_left));
+    el.className = 'uquota' + (currentUser.quota_used >= currentUser.quota_max || currentUser.seconds_left <= 0 ? ' warn' : '');
+    el.innerHTML = `<span class="qtext">${esc(text)}</span>`;
+    updateModelBadge();
+    return;
+  }
   if (currentUser.role === 'admin') {
     text = `${t('quota_admin_role')} — ${t('quota_admin_unlimited')}`;
     el.className = 'uquota';
@@ -1026,7 +1200,7 @@ $('#model-select').addEventListener('change', async (e) => {
       body: JSON.stringify({ model })
     });
     const me = await (await fetch('/api/me')).json();
-    if (me.username) { currentUser = me; updateQuota(); updateModelBadge(); }
+    if (me.username) { currentUser = me; updateQuota(); updateModelBadge(); afterGuestRefresh(); }
   }
   toast(t('model_changed', model), 'success');
 });
@@ -1355,6 +1529,7 @@ async function sendTemp(text) {
     });
     if (!res.ok) {
       const err = await res.json();
+      if (handleGuestError(err.error, box)) return;
       if (err.error === 'ERR_QUOTA') throw new Error(t('err_quota'));
       throw new Error(terr(err.error) || 'HTTP ' + res.status);
     }
@@ -1398,7 +1573,7 @@ async function sendTemp(text) {
     abortCtrl = null;
     try {
       const me = await (await fetch('/api/me')).json();
-      if (me.username) { currentUser = me; updateQuota(); }
+      if (me.username) { currentUser = me; updateQuota(); afterGuestRefresh(); }
     } catch (_) {}
   }
 }
@@ -1456,6 +1631,7 @@ async function send() {
 
     if (!res.ok) {
       const err = await res.json();
+      if (handleGuestError(err.error, box)) return;
       if (err.error === 'ERR_QUOTA') throw new Error(t('err_quota'));
       throw new Error(terr(err.error) || 'HTTP ' + res.status);
     }
@@ -1512,7 +1688,7 @@ async function send() {
     abortCtrl = null;
     await loadChats();
     const me = await (await fetch('/api/me')).json();
-    if (me.username) { currentUser = me; updateQuota(); }
+    if (me.username) { currentUser = me; updateQuota(); afterGuestRefresh(); }
   }
 }
 
@@ -1768,6 +1944,9 @@ async function loadAdminPanel() {
   $('#set-max-reply').value = settings.max_reply_tokens || 1024;
   $('#set-timeout').value = settings.timeout_ms || 120;
   $('#set-memory-enabled').checked = !!settings.memory_enabled;
+  $('#set-guest-enabled').checked = !!settings.guest_enabled;
+  $('#set-guest-chats').value = settings.guest_max_chats || 10;
+  $('#set-guest-minutes').value = settings.guest_max_minutes || 5;
   if (settings.today_usage) $('#admin-today-usage').textContent = t('today_usage', settings.today_usage.t, settings.today_usage.p, settings.today_usage.c);
   renderAdminAI();
   await loadAdminUsers();
@@ -1904,6 +2083,29 @@ $('#token-save').addEventListener('click', async () => {
   const data = await r.json();
   if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
   toast(t('token_saved'), 'success');
+});
+
+$('#guest-save').addEventListener('click', async () => {
+  const r = await fetch('/api/admin/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      guest_enabled: $('#set-guest-enabled').checked,
+      guest_max_chats: Number($('#set-guest-chats').value),
+      guest_max_minutes: Number($('#set-guest-minutes').value)
+    })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
+  toast(t('guest_saved'), 'success');
+  if ($('#login-view').classList.contains('ready')) refreshGuestButton();
+});
+
+$('#guest-reset').addEventListener('click', async () => {
+  $('#set-guest-enabled').checked = true;
+  $('#set-guest-chats').value = 10;
+  $('#set-guest-minutes').value = 5;
+  $('#guest-save').dispatchEvent(new MouseEvent('click', { bubbles: false }));
 });
 
 $('#token-reset').addEventListener('click', async () => {
@@ -2111,6 +2313,7 @@ const WALLPAPER_PRESETS = [
 ];
 
 $('#btn-settings').addEventListener('click', async () => {
+  if (isGuest()) { toast(terr('ERR_GUEST_NOPE'), 'error'); return; }
   $('#modal-settings').classList.add('active');
   $('#settings-username').textContent = t('settings_as', currentUser.username);
   renderSettingsAvatar();
@@ -2295,6 +2498,7 @@ document.addEventListener('keydown', (e) => {
     $('#modal-logout').classList.remove('active');
     $('#modal-rename').classList.remove('active');
     $('#modal-quota').classList.remove('active');
+    $('#modal-guest').classList.remove('active');
     closeModelCombo();
   }
 });
@@ -2308,7 +2512,7 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 // ---------- boot ----------
-console.log('[TT] app v1.0-beta fresh-load');
+console.log('[TT] app v1.0-beta.6 fresh-load');
 (async () => {
   let user = null;
   try {
@@ -2328,6 +2532,7 @@ console.log('[TT] app v1.0-beta fresh-load');
   try { applyTempUI(); } catch(e) { console.warn('temp boot:', e); }
 
   if (user) await enterApp();
+  else refreshGuestButton();
 })();
 
 // fallback: jangan pernah blank screen

@@ -68,6 +68,18 @@
 | Instant session revoke | Deactivate or password reset kills sessions immediately |
 | Quota edit & reset | Admin edits any user's daily quota (1–999999) and resets one or all users' usage |
 
+### Guest Mode (no login)
+
+| Feature | Description |
+|---|---|
+| **Try as guest** | Button under Login on the login screen (only shown when guest mode is enabled + gateway configured); clicks straight into the chat dashboard |
+| Configurable limits | Admin sets **max messages per guest** (1–200, default 10) and **session time limit** (1–60 min, default 5) |
+| Live guest chip | Sidebar shows `Guest — n/max messages · mm:ss left` (turns red under 60 s) |
+| Login popup on exhaustion | When chats or time run out, an in-app modal asks to sign in; "Continue as guest" dismisses it, "Sign in now" goes to login |
+| Server-enforced | Limits checked before the AI call; rejected sends roll back their bubbles (nothing stored); expired sessions can't post to any account endpoint (`ERR_GUEST_NOPE`) |
+| Session persistence | Cookie `gtoken` (HttpOnly, 24 h); chat history kept during the session, survives reload; re-clicking guest mints a fresh session |
+| Clean stats | Guest messages never touch the `usage` table — admin statistics stay per-real-user |
+
 ### Models
 
 | Feature | Description |
@@ -320,8 +332,10 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | Method | Endpoint | Body | Description |
 |---|---|---|---|
 | POST | `/api/login` | `{username, password}` | Sign in |
-| POST | `/api/logout` | - | Destroy session |
-| GET | `/api/me` | - | User info + quota + effective model + global assistant avatar |
+| POST | `/api/logout` | - | Destroy session (user + guest cookies) |
+| GET | `/api/me` | - | User info + quota + effective model + global assistant avatar (guest: `guest, quota_used/max, seconds_left, expired`) |
+| POST | `/api/guest` | - | Start/reuse guest session (cookie `gtoken`; 403 when guest mode off) |
+| GET | `/api/guest-config` | - | `{enabled}` — login screen show/hide for the guest button (no auth) |
 | GET | `/api/health` | - | Liveness + DB check (no auth, for uptime monitors) |
 
 ### Account
@@ -379,7 +393,7 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | POST | `/api/admin/avatar` | `{userId, avatar\|null}` | Upload / reset any user's avatar (self-sync immediate) |
 | POST | `/api/admin/assistant-avatar` | `{avatar\|null}` | Global assistant (AI) avatar for all users |
 | GET | `/api/admin/settings` | - | Global settings + today's token totals (prompt/completion) |
-| PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, memory_enabled?, timeout_ms?}` | Update settings (budget 200–32000, reply cap 64–8192, timeout 30–600 s) |
+| PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, memory_enabled?, timeout_ms?, guest_enabled?, guest_chats?, guest_minutes?}` | Update settings (budget 200–32000, reply cap 64–8192, timeout 30–600 s, guest chats 1–200, guest minutes 1–60) |
 | GET | `/api/admin/router-config` | - | Model gateway base URL + masked key + source (`database`/`env`) |
 | PUT | `/api/admin/router-config` | `{base_url?, api_key?}` | Set gateway base URL & API key (hot-reload, no restart; empty key = keep) |
 | POST | `/api/admin/router-test` | `{base_url?, api_key?}` | Probe `GET {base}/models` with saved **or** posted (pre-save) creds → latency + model count |
@@ -415,6 +429,10 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | `ERR_BASE_INVALID` | Base URL not a valid http(s) URL |
 | `ERR_BASE_BLOCKED_HOST` | Base URL host blocked (link-local / metadata addresses) |
 | `ERR_TIMEOUT` | Upstream model call timed out |
+| `ERR_GUEST_DISABLED` | Guest mode is turned off |
+| `ERR_GUEST_CHATS` | Guest message limit reached |
+| `ERR_GUEST_TIME` | Guest session time limit reached |
+| `ERR_GUEST_NOPE` | Account feature unavailable in guest mode |
 
 ---
 
@@ -430,11 +448,14 @@ chats     (id, user_id, title, model, lean,
            created_at, updated_at)                 -- lean: 1 = no-history token saver
 messages  (id, chat_id, role, content, tokens, created_at)
 usage     (user_id, date, request_count, tokens_used)  -- PK (user_id, date)
+guest_sessions (token, guest_id, msgs_used, started_at, expires_at)
+          -- guest chats stored under user_id = -guest_id; wiped on logout / purge
 memories  (id, user_id, content, source, updated_at)  -- cross-chat facts (max 20/user)
 settings  (key, value)
           -- keys: default_model, wallpaper, assistant_avatar, router_base, router_key,
           --         user:<id>:wallpaper, history_token_budget, max_reply_tokens,
-          --         memory_enabled, timeout_ms, memory_sync_chat, memory:last:<id>
+          --         memory_enabled, timeout_ms, memory_sync_chat, memory:last:<id>,
+          --         guest_enabled, guest_chats, guest_minutes
 ```
 
 ---
@@ -483,6 +504,9 @@ when the request arrives via HTTPS.
 - 9Router API key never sent to browser (server-side proxy only)
 - Per-user chat isolation enforced in every SQL query
 - Model policy enforced server-side (not just hidden in UI)
+- Guest mode: chat/time limits enforced server-side **before** the AI call; guests blocked from all
+  account endpoints (`ERR_GUEST_NOPE`); guest chats isolated under negative user ids and excluded
+  from the `usage` stats table
 - Quota checked before every AI call; failed/aborted streams do not consume quota
 - Deactivate / password reset revokes all sessions instantly
 - Caching: HTML `no-store`, CSS/JS `no-cache` + `?v=` asset version in `index.html` (bump on each release so old client caches invalidate automatically)
@@ -500,3 +524,20 @@ when the request arrives via HTTPS.
 | Not auto-starting at boot | `./manage.sh enable-boot`, verify `loginctl show-user $USER \| grep Linger` |
 | Stale UI after update | Hard refresh: `Ctrl+Shift+R` (HTML/CSS/JS are all no-cache; rarely needed) |
 | Full reset (nuclear) | `./manage.sh stop && rm -f chat.db* && ./manage.sh start` — all data gone |
+
+---
+
+## Changelog
+
+### v1.0-beta (current)
+
+- **Guest Mode** — login-free access via a "Try as guest" button; per-guest message limit (1–200)
+  and session time limit (1–60 min) configurable in Admin Dashboard; live countdown chip;
+  in-app login popup on chats/time exhaustion; server-enforced quota + endpoint lockdown;
+  bilingual (EN/ID); guest data purged on logout
+- **Model Connection in Admin Dashboard** — gateway Base URL + API key stored in DB (no more
+  hardcode), masked key + eye toggle, live Test button (latency + model count), hot-reload,
+  SSRF guard on base URL
+- Searchable model combobox, per-user quota edit, realtime quota UI (post-reply + 5 s admin poll),
+  global assistant avatar, custom dialogs (confirm/rename/quota), red model-lock chip,
+  minimized sidebar fixes, versioned asset cache-busting

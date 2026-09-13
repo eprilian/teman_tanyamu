@@ -76,6 +76,15 @@ input, textarea, select { font-family: inherit; }
   transition: background 120ms;
 }
 .login-btn:hover { background: var(--accent-hover); }
+.guest-btn {
+  width: 100%; margin-top: 10px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: transparent; color: var(--text-2); border: 1px dashed var(--border);
+  padding: 10px; border-radius: 10px; font-size: 13px; font-weight: 500;
+  transition: border-color 120ms, color 120ms, background 120ms;
+}
+.guest-btn:hover { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.guest-btn[hidden] { display: none; }
+.guest-btn:disabled { opacity: .6; }
 .login-foot { text-align: center; color: var(--text-3); font-size: 12px; margin-top: 18px; }
 
 #app-view { display: none; height: 100vh; }
@@ -427,7 +436,7 @@ input, textarea, select { font-family: inherit; }
   backdrop-filter: blur(2px);
 }
 .modal-backdrop.active { display: flex; animation: fadeIn 140ms ease; }
-#modal-confirm, #modal-rename, #modal-quota { z-index: 60; }
+#modal-confirm, #modal-rename, #modal-quota, #modal-guest { z-index: 60; }
 .modal {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 16px; padding: 22px; width: min(460px, 94vw); max-height: 84vh; overflow-y: auto;
