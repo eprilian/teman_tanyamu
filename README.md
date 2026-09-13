@@ -10,6 +10,7 @@
 | **Providers** | AG, Groq, BAI, OpenRouter, Nvidia, Cline — 497+ models |
 | **Frontend** | `index.html` + `style.css` + `app.js`, zero framework, dark theme |
 | **Language** | English (default) / Indonesian — runtime toggle |
+| **Version** | v1.0-beta |
 | **License** | Private / personal use |
 
 ---
@@ -29,6 +30,7 @@
 11. [Performance](#performance)
 12. [Security Notes](#security-notes)
 13. [Troubleshooting](#troubleshooting)
+14. [Changelog](#changelog)
 
 ---
 
@@ -40,14 +42,19 @@
 |---|---|
 | Real-time streaming | SSE relay, word-by-word from 9Router |
 | Multi-session history | Per-user isolation in SQLite |
-| Chat memory | Last 10 messages used as AI context |
-| Rename / Delete chats | Via sidebar hover buttons |
+| Chat memory | Token-budget context window (default 1600 tokens ≈ 15–30 msgs, oldest auto-compressed) + rolling background summary of older turns |
+| **Cross-chat memory** | Auto-extracted personal facts per user (max 20), injected into every chat; editable in Settings → Memory |
+| **Token saver** | `max_tokens` reply cap (default 1024), history budget, per-chat **Lean ⚡** toggle (answers without history) |
+| Per-reply usage badge | prompt / completion / total tokens shown under each AI reply |
+| Rename / Delete chats | Via sidebar hover buttons; rename uses custom in-app dialog (bilingual, no native prompt) |
 | **Chat search** | Instant client-side filter by title (sidebar) |
 | Markdown + code blocks | With streaming auto-close fence fix |
 | Copy & Retry | Per-message actions |
 | Stop generation | Abort mid-stream |
+| Provider timeout | Admin-configurable 30–600 s (default 120 s), applies to all upstream calls |
 | Typing indicator | Animated dots while waiting |
-| **Temporary Chat** | Zero history saved (endpoint: `/api/temp-chat`) |
+| **Temporary Chat** | Zero history saved (endpoint: `/api/temp-chat`); honours Lean mode (skip history + memory = zero context) |
+| **Realtime quota UI** | Sidebar quota + admin dashboard refresh automatically after every reply (dashboard auto-polls every 5 s while open) |
 
 ### Users & Access
 
@@ -56,20 +63,21 @@
 | Login | scrypt per-user salt (`scrypt1:salt:hash`), timing-safe compare; legacy static-salt hashes auto-upgrade on login |
 | Session purge | Expired sessions deleted on every login |
 | Roles | `admin` (full control) and `user` (chat only) |
-| Daily quota | Per-user limit (default 50/day), admin unlimited |
-| User management | Admin: add / delete / reset password / activate / deactivate |
+| Daily quota | Per-user limit (default 50/day), admin unlimited; quota bar shown in sidebar with model chip |
+| User management | Admin: add / delete / reset password / activate / deactivate (self-deletion & self-deactivation blocked server-side) |
 | Instant session revoke | Deactivate or password reset kills sessions immediately |
-| Quota reset | Admin can reset any user's daily usage |
+| Quota edit & reset | Admin edits any user's daily quota (1–999999) and resets one or all users' usage |
 
 ### Models
 
 | Feature | Description |
 |---|---|
 | Auto-fetch | Model list pulled live from 9Router |
+| **Searchable picker** | Custom combobox with instant filter + keyboard nav (↑/↓/Enter/Esc), works for admin & locked users |
 | Global default | Admin setting, applies to all users |
 | Per-user override | Admin sets specific model per user |
 | Per-chat model | Each chat remembers its model |
-| Locked for users | Regular users cannot change model (server-enforced) |
+| Locked for users | Regular users cannot change model (server-enforced); UI shows a red "Terkunci / Locked" chip |
 
 ### Appearance
 
@@ -77,10 +85,13 @@
 |---|---|
 | Dark theme | Open WebUI inspired palette |
 | Chat wallpaper | 6 presets + custom image upload (per-user, optional global); dark overlay only for image wallpapers, gradient presets render as-is |
-| Custom avatar | Auto-downscaled upload, strict base64 validation |
-| Sidebar minimize | Desktop: icon rail, state persisted · Mobile: closes the drawer |
-| Bilingual UI | English / Indonesian, all strings translated |
-| Responsive | Mobile drawer sidebar, 44px+ tap targets |
+| Custom avatar | Auto-downscaled upload, strict base64 validation; rendered in chat bubbles, sidebar and admin list |
+| **Global assistant avatar** | Admin uploads one AI avatar for everyone (`/api/admin/assistant-avatar`), or resets to default mask icon |
+| **Admin avatar popover** | Click any avatar row in the admin user table → upload / reset / cancel (no native prompts anywhere) |
+| Sidebar minimize | Desktop: icon rail (user-row collapses to avatar + stacked actions), state persisted · Mobile: closes the drawer |
+| Bilingual UI | English / Indonesian, all strings translated — dialogs, toasts, admin panel, error codes |
+| Custom dialogs | All confirm/rename/quota dialogs are in-app modals (i18n + consistent style), never native `alert/confirm/prompt` |
+| Responsive | Mobile drawer sidebar, 44px+ tap targets, admin tables become card stacks, verified 1920→320 px with no horizontal overflow |
 
 ---
 
@@ -89,7 +100,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        CLIENT (Browser)                         │
-│   Desktop / Mobile · split frontend (html/css/js) · zero framework         │
+│   Desktop / Mobile · split html/css/js · zero framework         │
 └───────────────┬─────────────────────────────────────────────────┘
                 │ fetch (cookie session)
                 ▼
@@ -97,11 +108,11 @@
 │                    TEMAN TANYAMU (Node.js)                      │
 │                     http://0.0.0.0:3000                         │
 │                                                                 │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────────┐  │
-│  │  Auth    │  │  Chats   │  │  Admin    │  │  Settings     │  │
-│  │  /login  │  │  CRUD    │  │  users    │  │  model/wall   │  │
-│  │  /me     │  │  memory  │  │  quota    │  │  global/per-u │  │
-│  └────┬─────┘  └────┬─────┘  └────┬──────┘  └──────┬────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────────┐   │
+│  │  Auth    │  │  Chats   │  │  Admin    │  │  Settings     │   │
+│  │  /login  │  │  CRUD    │  │  users    │  │  model/wall   │   │
+│  │  /me     │  │  memory  │  │  quota    │  │  global/per-u │   │
+│  └────┬─────┘  └────┬─────┘  └────┬──────┘  └──────┬────────┘   │
 │       │             │             │                 │           │
 │  ┌────▼─────────────▼─────────────▼─────────────────▼────────┐  │
 │  │                SQLite (chat.db, WAL mode)                 │  │
@@ -110,7 +121,7 @@
 │                                                                 │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │           SSE Relay (streaming passthrough)               │  │
-│  │  /api/chat · /api/temp-chat · 120s timeout · abortable    │  │
+│  │  /api/chat · /api/temp-chat · timeout 30-600s (admin)      │ │
 │  └───────────────────────────┬───────────────────────────────┘  │
 └──────────────────────────────┼──────────────────────────────────┘
                                │ HTTP + Bearer key (server-side only)
@@ -121,8 +132,8 @@
 └───────────────┬──────────────┬──────────────┬──────────────────┘
                 ▼              ▼              ▼
             ┌───────┐     ┌─────────┐    ┌──────────┐
-            │ AG /  │     │  Groq / │    │ OpenRtr/ │
-            │  BAI  │     │ Nvidia  │    │  Cline   │
+            │ AG /  │     │  Groq / │    │ OpenRtr/               │
+            │  BAI  │     │ Nvidia  │    │  Cline                 │
             └───────┘     └─────────┘    └──────────┘
 ```
 
@@ -135,7 +146,7 @@
 | Server-side API key proxy | Key never reaches the browser |
 | SSE relay (not direct) | Streaming works cross-device, CORS-free |
 | Error codes (`ERR_*`) | Translated client-side per language |
-| no-cache delivery | HTML: no-store · CSS/JS: no-cache (updates always fresh) |
+| no-cache delivery + versioned assets | HTML: no-store · CSS/JS: no-cache + `?v=` query (updates always fresh, stale caches bust on release) |
 | Split frontend (`style.css` + `app.js`) | Cacheable assets, lintable JS, CSP-ready |
 
 ---
@@ -306,7 +317,7 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 |---|---|---|---|
 | POST | `/api/login` | `{username, password}` | Sign in |
 | POST | `/api/logout` | - | Destroy session |
-| GET | `/api/me` | - | User info + quota + effective model |
+| GET | `/api/me` | - | User info + quota + effective model + global assistant avatar |
 | GET | `/api/health` | - | Liveness + DB check (no auth, for uptime monitors) |
 
 ### Account
@@ -325,16 +336,26 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | GET | `/api/chats` | - | List own chats |
 | POST | `/api/chats` | `{title?, model?}` | Create chat |
 | GET | `/api/chats/:id` | - | Chat + full messages |
-| PATCH | `/api/chats/:id` | `{title?, model?}` | Rename / change model |
+| PATCH | `/api/chats/:id` | `{title?, model?}` | Rename (model change = admin) |
+| PATCH | `/api/chats/:id/lean` | `{lean: bool}` | Toggle lean (no-history) token saver per chat |
 | DELETE | `/api/chats/:id` | - | Delete chat + messages |
+
+### Memory (cross-chat, per user)
+
+| Method | Endpoint | Body | Description |
+|---|---|---|---|
+| GET | `/api/memory` | - | List own memory facts + enabled flag |
+| PUT | `/api/memory` | `{facts: string[]}` | Replace full fact list (max 20, 240 chars each) |
+| DELETE | `/api/memory/:factId` | - | Delete one fact |
+| POST | `/api/memory/clear` | - | Wipe own memory |
 
 ### Chat & Preferences
 
 | Method | Endpoint | Body | Description |
 |---|---|---|---|
 | GET | `/api/models` | - | Model list from 9Router |
-| POST | `/api/chat` | `{chatId, message}` | Streamed chat (SSE) |
-| POST | `/api/temp-chat` | `{message, model?}` | Streamed temp chat (SSE, not saved) |
+| POST | `/api/chat` | `{chatId, message}` | Streamed chat (SSE); token-budget context + system memory injected; final `usage` event with prompt/completion split |
+| POST | `/api/temp-chat` | `{message, model?, lean?}` | Streamed temp chat (SSE, not saved); `lean:true` = zero context (no system prompt/memory) |
 | GET | `/api/wallpaper` | - | Effective wallpaper |
 | PUT | `/api/wallpaper` | `{wallpaper\|null}` | Own wallpaper |
 
@@ -342,15 +363,19 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 
 | Method | Endpoint | Body | Description |
 |---|---|---|---|
-| GET | `/api/admin/users` | - | Users + today's usage |
+| GET | `/api/admin/users` | - | Users + today's usage + effective model + `me` id |
 | POST | `/api/admin/users` | `{username, password, role, daily_quota}` | Create user |
-| DELETE | `/api/admin/users/:id` | - | Delete user |
+| DELETE | `/api/admin/users/:id` | - | Delete user (self-delete blocked) |
 | PUT | `/api/admin/users/:id/password` | `{password}` | Reset password (revokes sessions) |
-| PUT | `/api/admin/users/:id/active` | `{active: bool}` | Activate / deactivate |
-| PUT | `/api/admin/users/:id/reset-quota` | - | Reset daily usage |
+| PUT | `/api/admin/users/:id/active` | `{active: bool}` | Activate / deactivate (self-deactivate blocked) |
+| PUT | `/api/admin/users/:id/quota` | `{daily_quota}` | Edit daily quota (1–999999) |
+| PUT | `/api/admin/users/:id/reset-quota` | - | Reset one user's daily usage |
+| PUT | `/api/admin/reset-usage` | - | Reset **all** users' usage (`DELETE FROM usage`) |
 | PUT | `/api/admin/users/:id/model` | `{model\|null}` | Per-user model override |
-| GET | `/api/admin/settings` | - | Global settings |
-| PUT | `/api/admin/settings` | `{default_model}` | Set global default model |
+| POST | `/api/admin/avatar` | `{userId, avatar\|null}` | Upload / reset any user's avatar (self-sync immediate) |
+| POST | `/api/admin/assistant-avatar` | `{avatar\|null}` | Global assistant (AI) avatar for all users |
+| GET | `/api/admin/settings` | - | Global settings + today's token totals (prompt/completion) |
+| PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, memory_enabled?, timeout_ms?}` | Update settings (budget 200–32000, reply cap 64–8192, timeout 30–600 s) |
 | PUT | `/api/admin/wallpaper` | `{wallpaper\|null}` | Set global wallpaper |
 
 ### Error Codes
@@ -374,6 +399,11 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | `ERR_SELF_DELETE` | Cannot delete own account |
 | `ERR_SELF_DEACTIVATE` | Cannot deactivate own account |
 | `ERR_BAD_BODY` | Malformed JSON body |
+| `ERR_BAD_BUDGET` | History budget out of range (200–32000) |
+| `ERR_BAD_MAXTOK` | Reply token cap out of range (64–8192) |
+| `ERR_BAD_TIMEOUT` | Upstream timeout out of range (30–600 s) |
+| `ERR_ROUTER_DOWN` | 9Router unreachable |
+| `ERR_TIMEOUT` | Upstream model call timed out |
 
 ---
 
@@ -385,12 +415,15 @@ users     (id, username, password_hash, role, daily_quota,
           -- password_hash: "scrypt1:<salt>:<hash>" (per-user salt);
           -- legacy static-salt hex auto-upgrades on next login
 sessions  (token, user_id, expires_at)             -- expired rows purged on login
-chats     (id, user_id, title, model,
-           created_at, updated_at)
+chats     (id, user_id, title, model, lean,
+           created_at, updated_at)                 -- lean: 1 = no-history token saver
 messages  (id, chat_id, role, content, tokens, created_at)
 usage     (user_id, date, request_count, tokens_used)  -- PK (user_id, date)
+memories  (id, user_id, content, source, updated_at)  -- cross-chat facts (max 20/user)
 settings  (key, value)
-          -- keys: default_model, wallpaper, user:<id>:wallpaper
+          -- keys: default_model, wallpaper, assistant_avatar,
+          --         user:<id>:wallpaper, history_token_budget, max_reply_tokens,
+          --         memory_enabled, timeout_ms, memory_sync_chat, memory:last:<id>
 ```
 
 ---
@@ -441,7 +474,7 @@ when the request arrives via HTTPS.
 - Model policy enforced server-side (not just hidden in UI)
 - Quota checked before every AI call; failed/aborted streams do not consume quota
 - Deactivate / password reset revokes all sessions instantly
-- Caching: HTML `no-store`, CSS/JS `no-cache` (updates always fresh)
+- Caching: HTML `no-store`, CSS/JS `no-cache` + `?v=` asset version in `index.html` (bump on each release so old client caches invalidate automatically)
 
 ---
 
