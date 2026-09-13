@@ -89,6 +89,10 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_guest_sessions_gid ON guest_sessions (gu
 try { db.exec('DROP TABLE IF EXISTS guest_policy'); } catch (_) {}
 try { db.exec('ALTER TABLE guest_sessions ADD COLUMN msgs_used INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE guest_sessions ADD COLUMN started_at INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+// chat experience: pin / archive / tag
+try { db.exec('ALTER TABLE chats ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE chats ADD COLUMN tag TEXT'); } catch (_) {}
 
 // seed admin
 if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
@@ -455,6 +459,22 @@ function scheduleMemoryUpdate(user, chat, history) {
 
 const SUMMARY_SYSTEM = 'Ringkas percakapan lama ke dalam catatan konteks padat (maks 1200 karakter) yang menyatukan ringkasan lama + pesan baru. Simpan: topik, keputusan, fakta, tugas belum selesai, preferensi gaya. Bahasa Indonesia. Keluaran hanya ringkasan, tanpa preamble.';
 
+const TITLE_SYSTEM = 'Beri judul sangat pendek (2-5 kata) untuk percakapan berikut, dalam bahasa percakapan. Hanya keluaran judulnya, tanpa tanda kutip, tanpa titik di akhir.';
+// smart chat title: background call once; only replaces the provisional auto-title
+function scheduleTitle(chat, question, answer, provisional) {
+  const task = async () => {
+    const out = await nonStreamChat(chat.model, [
+      { role: 'system', content: TITLE_SYSTEM },
+      { role: 'user', content: 'USER: ' + question.slice(0, 500) + '\nAI: ' + answer.slice(0, 500) }
+    ], 24, 20000);
+    const title = String(out || '').replace(/["'“”‘’`.*]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (!title) return;
+    // only overwrite the provisional title (user may have renamed meanwhile)
+    db.prepare('UPDATE chats SET title = ? WHERE id = ? AND title = ?').run(title, chat.id, provisional);
+  };
+  bgTask('title', task);
+}
+
 function scheduleSummary(chat, newUptoId) {
   const summary = chat.summary || '';
   const rows = db.prepare('SELECT id, role, content FROM messages WHERE chat_id = ? AND id > ? ORDER BY id LIMIT 100').all(chat.id, chat.summary_upto_id || 0);
@@ -669,7 +689,7 @@ app.delete('/api/me/model', requireAuth, requireRegistered, requireAdmin, (req, 
 
 // ---------- chats ----------
 app.get('/api/chats', requireAuth, (req, res) => {
-  res.json(db.prepare('SELECT id, title, model, updated_at, lean, (summary IS NOT NULL AND summary != \'\') AS has_summary FROM chats WHERE user_id = ? ORDER BY updated_at DESC').all(req.user.id));
+  res.json(db.prepare('SELECT id, title, model, updated_at, lean, pinned, archived, tag, (summary IS NOT NULL AND summary != \'\') AS has_summary FROM chats WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC').all(req.user.id));
 });
 
 app.post('/api/chats', requireAuth, (req, res) => {
@@ -694,7 +714,7 @@ app.delete('/api/chats/:id', requireAuth, (req, res) => {
 });
 
 app.patch('/api/chats/:id', requireAuth, (req, res) => {
-  const { title, model } = req.body || {};
+  const { title, model, pinned, archived, tag } = req.body || {};
   const chat = db.prepare('SELECT id FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
   if (title) db.prepare("UPDATE chats SET title = ?, updated_at = datetime('now') WHERE id = ?").run(title.slice(0, 120), chat.id);
@@ -702,6 +722,40 @@ app.patch('/api/chats/:id', requireAuth, (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'ERR_ADMIN_ONLY' });
     db.prepare("UPDATE chats SET model = ?, updated_at = datetime('now') WHERE id = ?").run(model, chat.id);
   }
+  if (pinned !== undefined) db.prepare('UPDATE chats SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, chat.id);
+  if (archived !== undefined) db.prepare("UPDATE chats SET archived = ?, updated_at = datetime('now') WHERE id = ?").run(archived ? 1 : 0, chat.id);
+  if (tag !== undefined) {
+    const clean = tag === null || tag === '' ? null : String(tag).replace(/\s+/g, ' ').trim().slice(0, 32);
+    db.prepare('UPDATE chats SET tag = ? WHERE id = ?').run(clean, chat.id);
+  }
+  res.json({ ok: true });
+});
+
+// fork a chat: copy all messages into a new chat branch
+app.post('/api/chats/:id/fork', requireAuth, (req, res) => {
+  const chat = db.prepare('SELECT * FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  const msgs = db.prepare('SELECT role, content, tokens FROM messages WHERE chat_id = ? ORDER BY id').all(chat.id);
+  const t = db.transaction(() => {
+    const info = db.prepare('INSERT INTO chats (user_id, title, model, lean) VALUES (?, ?, ?, ?)').run(
+      req.user.id, (chat.title + ' (fork)').slice(0, 120), chat.model, chat.lean);
+    const ins = db.prepare('INSERT INTO messages (chat_id, role, content, tokens) VALUES (?, ?, ?, ?)');
+    for (const m of msgs) ins.run(info.lastInsertRowid, m.role, m.content, m.tokens);
+    return info.lastInsertRowid;
+  });
+  const newId = t();
+  res.json({ id: newId, title: (chat.title + ' (fork)').slice(0, 120) });
+});
+
+// truncate a chat: delete the given message AND everything after it
+// (client then re-sends for edit/regenerate flows)
+app.delete('/api/chats/:id/messages/:msgId', requireAuth, (req, res) => {
+  const chat = db.prepare('SELECT id FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  const msg = db.prepare('SELECT id FROM messages WHERE id = ? AND chat_id = ?').get(req.params.msgId, chat.id);
+  if (!msg) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  db.prepare('DELETE FROM messages WHERE chat_id = ? AND id >= ?').run(chat.id, msg.id);
+  db.prepare("UPDATE chats SET updated_at = datetime('now'), summary = NULL, summary_upto_id = 0 WHERE id = ?").run(chat.id);
   res.json({ ok: true });
 });
 
@@ -762,8 +816,12 @@ app.post('/api/chat', requireAuth, async (req, res) => {
   const systemPrompt = buildSystemPrompt(req.user, chat);
 
   db.prepare('INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)').run(chat.id, 'user', cleanMessage);
+  let provisionalTitle = null;
   if (chat.title === 'New Chat' || chat.title === 'Chat baru') {
-    db.prepare("UPDATE chats SET title = ?, updated_at = datetime('now') WHERE id = ?").run(cleanMessage.slice(0, 60), chat.id);
+    provisionalTitle = cleanMessage.slice(0, 60);
+    db.prepare("UPDATE chats SET title = ?, updated_at = datetime('now') WHERE id = ?").run(provisionalTitle, chat.id);
+  } else {
+    db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chat.id);
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -839,6 +897,7 @@ app.post('/api/chat', requireAuth, async (req, res) => {
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chat.id);
       countRequest(req.user, tokens, promptTokens, completionTokens);
       // background: refresh rolling summary + cross-chat memory (lean mode = no context, skip both)
+      if (provisionalTitle && !req.guest) scheduleTitle(chat, cleanMessage, aiReply, provisionalTitle);
       if (!lean) {
         const uptoId = db.prepare('SELECT MAX(id) m FROM messages WHERE chat_id = ?').get(chat.id).m || 0;
         scheduleSummary(chat, uptoId);
@@ -1000,12 +1059,13 @@ app.get('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
     guest_enabled: guestEnabled(),
     guest_max_chats: guestPolicy().max_chats,
     guest_max_minutes: guestPolicy().max_minutes,
+    guest_purge_hour: purgeHour(),
     today_usage: db.prepare('SELECT COALESCE(SUM(tokens_used),0) t, COALESCE(SUM(prompt_tokens),0) p, COALESCE(SUM(completion_tokens),0) c FROM usage WHERE date = ?').get(today())
   });
 });
 
 app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
-  const { default_model, history_token_budget, max_reply_tokens, memory_enabled, timeout_ms, guest_enabled, guest_max_chats, guest_max_minutes } = req.body || {};
+  const { default_model, history_token_budget, max_reply_tokens, memory_enabled, timeout_ms, guest_enabled, guest_max_chats, guest_max_minutes, guest_purge_hour } = req.body || {};
   if (default_model !== undefined) {
     if (!default_model || typeof default_model !== 'string') return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
     setSetting('default_model', default_model);
@@ -1037,7 +1097,41 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
     if (!Number.isFinite(n) || n < 30 || n > 600) return res.status(400).json({ error: 'ERR_BAD_TIMEOUT' });
     setSetting('timeout_ms', String(Math.round(n)));
   }
-  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 1024), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes });
+  if (guest_purge_hour !== undefined) {
+    const n = Number(guest_purge_hour);
+    if (!Number.isInteger(n) || n < 0 || n > 23) return res.status(400).json({ error: 'ERR_BAD_PURGE_HOUR' });
+    setSetting('guest_purge_hour', String(n));
+  }
+  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 1024), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes, guest_purge_hour: purgeHour() });
+});
+
+// ---------- admin: usage statistics ----------
+app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
+  const days = Math.min(90, Math.max(7, Number(req.query.days) || 30));
+  // last N days calendar (local date labels)
+  const perDay = db.prepare(`
+    SELECT date, SUM(request_count) reqs, SUM(tokens_used) tok, SUM(prompt_tokens) p, SUM(completion_tokens) c
+    FROM usage WHERE date >= date('now', ?)
+    GROUP BY date ORDER BY date`).all('-' + (days - 1) + ' day');
+  const byUser = db.prepare(`
+    SELECT u.username, SUM(v.request_count) reqs, SUM(v.tokens_used) tok
+    FROM usage v JOIN users u ON u.id = v.user_id WHERE v.date >= date('now',?)
+    GROUP BY v.user_id ORDER BY tok DESC LIMIT 10`).all('-' + (days - 1) + ' day');
+  // per-model: join messages->chats (only saved chats; temp chat excluded)
+  const byModel = db.prepare(`
+    SELECT c.model, COUNT(m.id) msgs, COALESCE(SUM(m.tokens),0) tok
+    FROM messages m JOIN chats c ON c.id = m.chat_id
+    WHERE m.role='assistant' AND c.user_id > 0 AND m.created_at >= datetime('now',?)
+    GROUP BY c.model ORDER BY tok DESC LIMIT 10`).all('-' + (days - 1) + ' day');
+  const totals = db.prepare(`
+    SELECT COALESCE(SUM(request_count),0) reqs, COALESCE(SUM(tokens_used),0) tok,
+      COALESCE(SUM(prompt_tokens),0) p, COALESCE(SUM(completion_tokens),0) c
+    FROM usage WHERE date >= date('now',?)`).get('-' + (days - 1) + ' day');
+  const activeUsers = db.prepare(`
+    SELECT COUNT(DISTINCT user_id) n FROM usage WHERE date >= date('now',?) AND user_id > 0`).get('-' + (days - 1) + ' day');
+  const guestSessions = db.prepare(`
+    SELECT COUNT(*) n FROM guest_sessions WHERE started_at >= (strftime('%s', 'now', ?) * 1000)`).get('-' + (days - 1) + ' day');
+  res.json({ days, per_day: perDay, by_user: byUser, by_model: byModel, totals, active_users: activeUsers.n, guest_sessions: guestSessions.n });
 });
 
 // ---------- admin: model gateway (Open WebUI style: base URL + API key) ----------
@@ -1226,6 +1320,40 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`dash_ai_me running on http://localhost:${PORT}`);
 });
+
+// ---------- scheduled guest-chat purge (admin-configurable local time, default 00:00) ----------
+let lastPurgeDay = '';
+
+app.post('/api/admin/guest-purge-now', requireAuth, requireAdmin, (req, res) => {
+  const n = runGuestPurge();
+  res.json({ ok: true, cleared: n });
+});
+function purgeHour() {
+  const n = Number(getSetting('guest_purge_hour'));
+  return Number.isFinite(n) ? Math.min(23, Math.max(0, Math.round(n))) : 0;
+}
+function runGuestPurge() {
+  // wipe ALL guest data: expired or not — this is the scheduled cleanup
+  const ids = db.prepare('SELECT DISTINCT guest_id FROM guest_sessions').all();
+  const delMsgs = db.prepare('DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE user_id = ?)');
+  const delChats = db.prepare('DELETE FROM chats WHERE user_id = ?');
+  let n = 0;
+  const tx = db.transaction(() => {
+    for (const g of ids) { delMsgs.run(-g.guest_id); delChats.run(-g.guest_id); n++; }
+    db.prepare('DELETE FROM guest_sessions').run();
+  });
+  tx();
+  console.log(`[guest-purge] cleared ${n} guest sessions`);
+  return n;
+}
+setInterval(() => {
+  const now = new Date();
+  if (now.getHours() !== purgeHour()) return;
+  const key = now.toDateString(); // fire once per calendar day
+  if (lastPurgeDay === key) return;
+  lastPurgeDay = key;
+  runGuestPurge();
+}, 60000);
 
 // graceful shutdown: close DB cleanly on stop/restart
 function shutdown() {

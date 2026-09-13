@@ -47,9 +47,13 @@
 | **Token saver** | `max_tokens` reply cap (default 1024), history budget, per-chat **Lean ⚡** toggle (answers without history) |
 | Per-reply usage badge | prompt / completion / total tokens shown under each AI reply |
 | Rename / Delete chats | Via sidebar hover buttons; rename uses custom in-app dialog (bilingual, no native prompt) |
+| **Pin / Archive / Tag / Fork** | Chat "⋯" menu: pin to top, archive to a collapsible "Archived (n)" section, inline #tag, fork = branch copy of the conversation (`(fork)` suffix) |
 | **Chat search** | Instant client-side filter by title (sidebar) |
 | Markdown + code blocks | With streaming auto-close fence fix |
 | Copy & Retry | Per-message actions |
+| **Smart chat title** | After the first reply a short 3–6 word title is generated in the background (never overwrites a manual rename) |
+| **Edit & regenerate** | Pencil on any user message → inline edit → save truncates everything after it; ↻ button regenerates from the last user message |
+| **Code highlight + copy** | fenced blocks get language colouring (bundled hljs, no CDN) + per-block copy button |
 | Stop generation | Abort mid-stream |
 | Provider timeout | Admin-configurable 30–600 s (default 120 s), applies to all upstream calls |
 | Typing indicator | Animated dots while waiting |
@@ -79,6 +83,21 @@
 | Server-enforced | Limits checked before the AI call; rejected sends roll back their bubbles (nothing stored); expired sessions can't post to any account endpoint (`ERR_GUEST_NOPE`) |
 | Session persistence | Cookie `gtoken` (HttpOnly, 24 h); chat history kept during the session, survives reload; re-clicking guest mints a fresh session |
 | Clean stats | Guest messages never touch the `usage` table — admin statistics stay per-real-user |
+| **Auto-delete (nightly purge)** | Scheduler wipes ALL guest data — sessions, chats, messages — once per day at an admin-configurable local hour (default 00:00, `guest_purge_hour`); plus a manual "Purge guest chats now" button in Admin → Usage Statistics |
+
+### Chat Experience
+
+| Feature | Description |
+|---|---|
+| **Smart title** | After the first reply, a short 3–6-word title is generated in the background (never overwrites manual renames; guests excluded) |
+| **Edit message** | Pencil on user bubbles → inline textarea → save = rewrite + truncate everything after, resend automatically |
+| **Regenerate** | ↻ on AI bubbles truncates from the last user message and resends |
+| **Code highlighting** | Fenced blocks coloured via bundled highlight.js (v11.9, served from `/vendor/`, no CDN) + per-block copy button; theme-aware (github-dark/github swap with the UI theme) |
+| **Pin / Tag / Fork / Archive** | Chat "⋯" menu — pin keeps chats at top, `#tag` shown as chip, fork copies the whole conversation as `(fork)`, archive hides chats into a collapsible "Archived (n)" section |
+
+### Usage Statistics (Admin)
+
+Last-30/60/90-days dashboard: card row (requests, total/prompt/completion tokens, active users, guest sessions), a canvas bar chart of daily tokens (no chart library, re-themes with light/dark), and top-10 bars by model and by user. Endpoints: `GET /api/admin/stats?days=30`, `POST /api/admin/guest-purge-now`.
 
 ### Models
 
@@ -96,7 +115,7 @@
 
 | Feature | Description |
 |---|---|
-| Dark theme | Open WebUI inspired palette |
+| **Light / dark theme** | Toggle in the sidebar (sun/moon); dark = Open WebUI palette, light derived from it. Persisted per browser; highlight.js CSS theme swaps with it |
 | Chat wallpaper | 6 presets + custom image upload (per-user, optional global); dark overlay only for image wallpapers, gradient presets render as-is |
 | Custom avatar | Auto-downscaled upload, strict base64 validation; rendered in chat bubbles, sidebar and admin list |
 | **Global assistant avatar** | Admin uploads one AI avatar for everyone (`/api/admin/assistant-avatar`), or resets to default mask icon |
@@ -354,7 +373,10 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | GET | `/api/chats` | - | List own chats |
 | POST | `/api/chats` | `{title?, model?}` | Create chat |
 | GET | `/api/chats/:id` | - | Chat + full messages |
-| PATCH | `/api/chats/:id` | `{title?, model?}` | Rename (model change = admin) |
+| PATCH | `/api/chats/:id` | `{title?, model?, pinned?, archived?, tag?}` | Rename / lock model (admin) / pin / archive / tag |
+| POST | `/api/chats/:id/fork` | - | Copy chat + messages into a new `(fork)` chat |
+| PUT | `/api/chats/:id/messages/:msgId` | `{content}` | Edit message content (user messages only) |
+| DELETE | `/api/chats/:id/messages/:msgId` | - | Truncate chat: delete that message + everything after it |
 | PATCH | `/api/chats/:id/lean` | `{lean: bool}` | Toggle lean (no-history) token saver per chat |
 | DELETE | `/api/chats/:id` | - | Delete chat + messages |
 
@@ -392,8 +414,10 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | PUT | `/api/admin/users/:id/model` | `{model\|null}` | Per-user model override |
 | POST | `/api/admin/avatar` | `{userId, avatar\|null}` | Upload / reset any user's avatar (self-sync immediate) |
 | POST | `/api/admin/assistant-avatar` | `{avatar\|null}` | Global assistant (AI) avatar for all users |
+| GET | `/api/admin/stats` | `?days=7\|30\|90` | Usage statistics: totals, per-day series, top models/users, guest sessions |
+| POST | `/api/admin/guest-purge-now` | - | Purge all guest data immediately |
 | GET | `/api/admin/settings` | - | Global settings + today's token totals (prompt/completion) |
-| PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, memory_enabled?, timeout_ms?, guest_enabled?, guest_chats?, guest_minutes?}` | Update settings (budget 200–32000, reply cap 64–8192, timeout 30–600 s, guest chats 1–200, guest minutes 1–60) |
+| PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, memory_enabled?, timeout_ms?, guest_enabled?, guest_max_chats?, guest_max_minutes?, guest_purge_hour?}` | Update settings (budget 200–32000, reply cap 64–8192, timeout 30–600 s, guest chats 1–200, guest minutes 1–60, purge hour 0–23) |
 | GET | `/api/admin/router-config` | - | Model gateway base URL + masked key + source (`database`/`env`) |
 | PUT | `/api/admin/router-config` | `{base_url?, api_key?}` | Set gateway base URL & API key (hot-reload, no restart; empty key = keep) |
 | POST | `/api/admin/router-test` | `{base_url?, api_key?}` | Probe `GET {base}/models` with saved **or** posted (pre-save) creds → latency + model count |
@@ -444,8 +468,9 @@ users     (id, username, password_hash, role, daily_quota,
           -- password_hash: "scrypt1:<salt>:<hash>" (per-user salt);
           -- legacy static-salt hex auto-upgrades on next login
 sessions  (token, user_id, expires_at)             -- expired rows purged on login
-chats     (id, user_id, title, model, lean,
-           created_at, updated_at)                 -- lean: 1 = no-history token saver
+chats     (id, user_id, title, model, lean, pinned, archived, tag,
+           summary, created_at, updated_at)        -- lean: 1 = no-history token saver
+          -- pinned/archived: 0/1; tag: free text (<= 24 chars)
 messages  (id, chat_id, role, content, tokens, created_at)
 usage     (user_id, date, request_count, tokens_used)  -- PK (user_id, date)
 guest_sessions (token, guest_id, msgs_used, started_at, expires_at)
@@ -455,7 +480,7 @@ settings  (key, value)
           -- keys: default_model, wallpaper, assistant_avatar, router_base, router_key,
           --         user:<id>:wallpaper, history_token_budget, max_reply_tokens,
           --         memory_enabled, timeout_ms, memory_sync_chat, memory:last:<id>,
-          --         guest_enabled, guest_chats, guest_minutes
+          --         guest_enabled, guest_max_chats, guest_max_minutes, guest_purge_hour
 ```
 
 ---
@@ -531,6 +556,12 @@ when the request arrives via HTTPS.
 
 ### v1.0-beta (current)
 
+- **Chat Experience** — smart auto-title after first reply, inline edit & regenerate (truncate +
+  resend), highlight.js code blocks with copy button, pin / tag / fork / archive chat menu
+- **Light / dark theme** — sidebar toggle, persisted per browser, hljs + stats chart re-theme live
+- **Usage Statistics (admin)** — 7/30/90-day cards, canvas daily-token chart, top models/users bars
+- **Scheduled guest purge** — wipes all guest data daily at an admin-set hour (`guest_purge_hour`,
+  default 00:00) + manual "Purge guest chats now" button
 - **Guest Mode** — login-free access via a "Try as guest" button; per-guest message limit (1–200)
   and session time limit (1–60 min) configurable in Admin Dashboard; live countdown chip;
   in-app login popup on chats/time exhaustion; server-enforced quota + endpoint lockdown;

@@ -12,6 +12,41 @@ let focusMode = localStorage.getItem('focusMode') === '1'; // lean global for te
 // ---------- i18n (default: English) ----------
 const I18N = {
   en: {
+    theme_toggle: 'Toggle theme',
+    theme_dark: 'Dark',
+    theme_light: 'Light',
+    pin_chat: 'Pin chat',
+    unpin_chat: 'Unpin',
+    archive_chat: 'Archive chat',
+    unarchive_chat: 'Unarchive',
+    fork_chat: 'Fork chat',
+    tag_chat: 'Tag',
+    tag_ph: 'e.g. coding',
+    tag_save: 'Set tag',
+    archived_section: 'Archived',
+    show_archived: 'Archived',
+    edit_msg: 'Edit',
+    edit_save: 'Send',
+    edit_cancel: 'Cancel',
+    delete_msg: 'Delete & regenerate',
+    stat_purge_now: 'Purge guest chats now',
+    stat_purged: 'Guest chats purged',
+    stat_title: 'Usage Statistics',
+    stat_sub: 'Last {0} days across all users.',
+    stat_days: 'Period (days)',
+    stat_reqs: 'Requests',
+    stat_tok: 'Tokens',
+    stat_prompt: 'Prompt',
+    stat_completion: 'Completion',
+    stat_active_users: 'Active users',
+    stat_guest_sessions: 'Guest sessions',
+    stat_per_day: 'Requests & tokens per day',
+    stat_by_model: 'Tokens by model',
+    stat_by_user: 'Top users by tokens',
+    stat_no_data: 'No usage data in this period.',
+    guest_purge_hour: 'Auto-delete guest chats daily at',
+    guest_purge_sub: 'Hour (0-23) in server local time',
+    guest_purged_toast: 'Guest cleanup settings saved',
     login_title: 'Welcome to Teman Tanyamu',
     login_sub: 'Sign in to continue your conversation',
     login_user: 'Username',
@@ -237,6 +272,41 @@ const I18N = {
     search_none: 'No chats match',
   },
   id: {
+    theme_toggle: 'Ganti tema',
+    theme_dark: 'Gelap',
+    theme_light: 'Terang',
+    pin_chat: 'Sematkan chat',
+    unpin_chat: 'Lepas sematan',
+    archive_chat: 'Arsipkan chat',
+    unarchive_chat: 'Keluarkan dari arsip',
+    fork_chat: 'Cabang chat (fork)',
+    tag_chat: 'Tag',
+    tag_ph: 'mis. coding',
+    tag_save: 'Pasang tag',
+    archived_section: 'Diarsipkan',
+    show_archived: 'Arsip',
+    edit_msg: 'Ubah',
+    edit_save: 'Kirim',
+    edit_cancel: 'Batal',
+    delete_msg: 'Hapus & buat ulang',
+    stat_purge_now: 'Hapus chat tamu sekarang',
+    stat_purged: 'Chat tamu dihapus',
+    stat_title: 'Statistik Penggunaan',
+    stat_sub: 'Terakhir {0} hari untuk semua user.',
+    stat_days: 'Periode (hari)',
+    stat_reqs: 'Permintaan',
+    stat_tok: 'Token',
+    stat_prompt: 'Prompt',
+    stat_completion: 'Completion',
+    stat_active_users: 'User aktif',
+    stat_guest_sessions: 'Sesi tamu',
+    stat_per_day: 'Permintaan & token per hari',
+    stat_by_model: 'Token per model',
+    stat_by_user: 'Top user by token',
+    stat_no_data: 'Belum ada data pada periode ini.',
+    guest_purge_hour: 'Hapus chat tamu otomatis tiap hari pukul',
+    guest_purge_sub: 'Jam (0-23) waktu lokal server',
+    guest_purged_toast: 'Pengaturan hapus tamu tersimpan',
     login_title: 'Selamat datang di Teman Tanyamu',
     login_sub: 'Masuk untuk melanjutkan percakapan',
     login_user: 'Username',
@@ -488,6 +558,7 @@ const ERR_MAP = {
   ERR_QUOTA: { en: 'Daily quota reached. Try again tomorrow.', id: 'Kuota harian habis. Coba lagi besok.' },
   ERR_RATE_LIMITED: { en: 'Too many attempts. Try again in', id: 'Terlalu banyak percobaan. Coba lagi dalam' },
   ERR_RATE_LIMITED_SEC: { en: 'seconds.', id: 'detik.' },
+  ERR_BAD_PURGE_HOUR: { en: 'Purge hour must be 0-23', id: 'Jam hapus harus 0-23' },
   LOGIN_REMAINING: { en: (n) => (n > 1 ? `${n} attempts remaining` : '1 attempt remaining'), id: (n) => (n > 1 ? `${n} percobaan tersisa` : '1 percobaan tersisa') },
 };
 function terr(code) {
@@ -558,6 +629,12 @@ function applyI18N() {
     setT('label[for="add-role"]', t('admin_role'));
     setT('label[for="add-quota"]', t('admin_quota'));
     setT('#admin-close', t('admin_close'));
+    setT('#admin-stat-title', t('stat_title'));
+    setT('#stat-purge-now', t('stat_purge_now'));
+    setT('#admin-stat-sub', t('stat_sub', Number($('#stat-days') ? $('#stat-days').value : 30)));
+    setT('#lbl-stat-days', t('stat_days'));
+    setT('#lbl-guest-purge', t('guest_purge_hour'));
+    setTitle('#btn-theme', t('theme_toggle')); setA('#btn-theme', 'aria-label', t('theme_toggle'));
     setT('#form-add-user button[type="submit"]', t('admin_add_btn'));
     setT('#settings-title-el', t('settings_title'));
     setT('#avatar-title-el', t('avatar'));
@@ -626,6 +703,28 @@ function applyI18N() {
   }
 }
 
+// ---------- theme (dark default / light) ----------
+let theme = localStorage.getItem('theme') || 'dark';
+function applyTheme() {
+  document.body.classList.toggle('light', theme === 'light');
+  const hl = document.getElementById('hljs-css');
+  if (hl) hl.href = theme === 'light' ? '/vendor/github.min.css' : '/vendor/github-dark.min.css';
+  const btn = document.getElementById('btn-theme');
+  if (btn) {
+    btn.querySelector('.ic-moon').style.display = theme === 'light' ? '' : 'none';
+    btn.querySelector('.ic-sun').style.display = theme === 'light' ? 'none' : '';
+    btn.title = t(theme === 'light' ? 'theme_dark' : 'theme_light');
+    btn.setAttribute('aria-label', btn.title);
+  }
+  try { if (typeof renderStatChart === 'function' && statCache) renderStatChart(); } catch (_) {}
+}
+document.getElementById('btn-theme').addEventListener('click', () => {
+  theme = theme === 'light' ? 'dark' : 'light';
+  localStorage.setItem('theme', theme);
+  applyTheme();
+});
+applyTheme();
+
 $('#btn-lang').addEventListener('click', () => {
   lang = lang === 'en' ? 'id' : 'en';
   localStorage.setItem('lang', lang);
@@ -636,6 +735,7 @@ $('#btn-lang').addEventListener('click', () => {
 const ICON_CHAT = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
 const SEND_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9 22 2z"/></svg>';
 const STOP_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+const ICON_EDIT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 const ICON_COPY = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const ICON_REFRESH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
 const ICON_UPLOAD = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
@@ -674,6 +774,15 @@ function renderMarkdown(text) {
   }
   html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/<pre>/g, '<pre><button type="button" class="code-copy" tabindex="-1">' + ICON_COPY + ' copy</button>');
+  if (typeof hljs !== 'undefined') {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    tmp.querySelectorAll('pre > code').forEach(el => {
+      try { hljs.highlightElement(el); } catch (_) {}
+    });
+    html = tmp.innerHTML;
+  }
   return html;
 }
 
@@ -1187,7 +1296,7 @@ function closeModelCombo(combo) {
 }
 
 document.addEventListener('click', () => closeModelCombo());
-document.addEventListener('scroll', () => closeModelCombo(), true);
+document.addEventListener('scroll', () => { closeModelCombo(); closeChatMenu(); }, true);
 
 $('#model-select').addEventListener('change', async (e) => {
   const model = e.target.value;
@@ -1213,20 +1322,94 @@ $('#model-select').addEventListener('change', async (e) => {
 });
 
 // ---------- chats ----------
+let showArchived = false;
+const ICON_DOTS = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+function chatItemHTML(c) {
+  return `
+    <div class="chat-item ${c.id === currentChatId ? 'active' : ''} ${c.pinned ? 'pinned' : ''}" data-id="${c.id}" role="button" tabindex="0">
+      <span class="ico">${c.lean ? '<span class="lean-dot" title="' + esc(t('lean_badge')) + '">⚡</span>' : ICON_CHAT}</span>
+      <span class="title">${c.pinned ? '<span class="pin-mark"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4l6 6-3.5 1-3.5 5-2-2-5 3.5L3 22l1-1 1-1 4.5-3.5-2-2 5-3.5L16 7z"/></svg></span>' : ''}${esc(c.title)}${c.tag ? ' <span class="chat-tag">#' + esc(c.tag) + '</span>' : ''}</span>
+      <button class="del" data-menu="${c.id}" aria-label="…" title="…">${ICON_DOTS}</button>
+      <button class="del" data-rename="${c.id}" aria-label="${esc(t('rename_chat'))} ${esc(c.title)}" title="${esc(t('rename_chat'))}">✎</button>
+      <button class="del" data-del="${c.id}" aria-label="${esc(t('del_chat'))} ${esc(c.title)}" title="${esc(t('del_chat'))}">✕</button>
+    </div>`;
+}
+let chatMenuEl = null;
+function closeChatMenu() { if (chatMenuEl) { chatMenuEl.remove(); chatMenuEl = null; } }
+function openChatMenu(id, anchor) {
+  closeChatMenu();
+  const c = chats.find(x => x.id === id);
+  if (!c) return;
+  const menu = document.createElement('div');
+  menu.className = 'chat-menu';
+  const svg = (d) => `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const items = [
+    ['pin', c.pinned ? t('unpin_chat') : t('pin_chat'), svg('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>')],
+    ['tag', t('tag_chat'), svg('<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>')],
+    ['fork', t('fork_chat'), svg('<circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M6 9v1a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9"/><line x1="12" y1="12" x2="12" y2="15"/>')],
+    ['arch', c.archived ? t('unarchive_chat') : t('archive_chat'), c.archived
+      ? svg('<polyline points="20.5 11 12 3 3.5 11"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>')
+      : svg('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/>')]
+  ];
+  menu.innerHTML = items.map(([act, label, ic]) =>
+    `<button class="cm-item" data-cm="${act}" data-cmid="${id}"><span class="cm-ic">${ic}</span>${esc(label)}</button>`).join('');
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  const mw = 190, mh = menu.offsetHeight || 150;
+  menu.style.left = Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + 'px';
+  menu.style.top = (r.bottom + mh > innerHeight - 8 ? Math.max(8, r.top - mh - 4) : r.bottom + 4) + 'px';
+  chatMenuEl = menu;
+}
+document.addEventListener('click', (e) => {
+  const mb = e.target.closest('[data-menu]');
+  if (mb) { e.stopPropagation(); openChatMenu(Number(mb.dataset.menu), mb); return; }
+  const cm = e.target.closest('[data-cm]');
+  if (cm) {
+    e.stopPropagation();
+    const id = Number(cm.dataset.cmid), act = cm.dataset.cm;
+    closeChatMenu();
+    chatMenuAction(id, act);
+    return;
+  }
+  if (!e.target.closest('.chat-menu')) closeChatMenu();
+});
+async function chatMenuAction(id, act) {
+  const c = chats.find(x => x.id === id);
+  if (!c) return;
+  if (act === 'pin') {
+    await fetch(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !c.pinned }) });
+    await loadChats();
+  } else if (act === 'arch') {
+    await fetch(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: !c.archived }) });
+    if (id === currentChatId && !c.archived) { currentChatId = null; $('#messages').innerHTML = emptyStateHTML(); }
+    await loadChats();
+    toast(t(c.archived ? 'unarchive_chat' : 'archive_chat'), 'success');
+  } else if (act === 'fork') {
+    const r = await fetch(`/api/chats/${id}/fork`, { method: 'POST' });
+    if (!r.ok) { toast(terr((await r.json()).error), 'error'); return; }
+    const nc = await r.json();
+    await loadChats();
+    openChat(nc.id);
+    toast(t('fork_chat'), 'success');
+  } else if (act === 'tag') {
+    openTagModal(id);
+  }
+}
 async function loadChats() {
   chats = await (await fetch('/api/chats')).json();
   const list = $('#chat-list');
+  const live = chats.filter(c => !c.archived);
+  const arch = chats.filter(c => c.archived);
   if (!chats.length) {
     list.innerHTML = '<div class="chat-empty-hint" style="padding:10px 8px; font-size:12.5px; color:var(--text-3);">' + t('chat_empty') + '</div>';
     return;
   }
-  list.innerHTML = chats.map(c => `
-    <div class="chat-item ${c.id === currentChatId ? 'active' : ''}" data-id="${c.id}" role="button" tabindex="0">
-      <span class="ico">${c.lean ? '<span class="lean-dot" title="' + esc(t('lean_badge')) + '">⚡</span>' : ICON_CHAT}</span>
-      <span class="title">${esc(c.title)}</span>
-      <button class="del" data-rename="${c.id}" aria-label="${esc(t('rename_chat'))} ${esc(c.title)}" title="${esc(t('rename_chat'))}">✎</button>
-      <button class="del" data-del="${c.id}" aria-label="${esc(t('del_chat'))} ${esc(c.title)}" title="${esc(t('del_chat'))}">✕</button>
-    </div>`).join('');
+  let html = live.map(chatItemHTML).join('');
+  if (arch.length) {
+    html += `<div class="side-section arch-toggle" id="arch-toggle" role="button" tabindex="0">${esc(t('archived_section'))} (${arch.length})</div>`;
+    if (showArchived) html += arch.map(chatItemHTML).join('');
+  }
+  list.innerHTML = html;
 }
 
 // ---------- chat search filter ----------
@@ -1259,9 +1442,34 @@ $('#chat-list').addEventListener('click', async (e) => {
     $('#confirm-ok').focus();
     return;
   }
+  if (e.target.closest('#arch-toggle')) { showArchived = !showArchived; loadChats(); return; }
   const item = e.target.closest('.chat-item');
   if (item) await openChat(Number(item.dataset.id));
 });
+
+// tag editor: small inline row inside the chat item (no new modal needed)
+function openTagModal(id) {
+  const item = document.querySelector(`.chat-item[data-id="${id}"]`);
+  if (!item || item.querySelector('.tag-edit')) return;
+  const c = chats.find(x => x.id === id);
+  const row = document.createElement('div');
+  row.className = 'tag-edit';
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.maxLength = 32; inp.placeholder = t('tag_ph'); inp.value = c && c.tag ? c.tag : '';
+  const ok = document.createElement('button');
+  ok.className = 'btn-primary'; ok.textContent = t('tag_save');
+  row.append(inp, ok);
+  item.after(row);
+  inp.focus();
+  const save = async () => {
+    const v = inp.value.trim();
+    await fetch(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: v }) });
+    row.remove();
+    await loadChats();
+  };
+  ok.addEventListener('click', save);
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') row.remove(); });
+}
 
 $('#chat-list').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.classList.contains('chat-item')) {
@@ -1421,7 +1629,12 @@ function renderMessages(messages) {
   lastRendered = messages || [];
   const box = $('#messages');
   if (!lastRendered.length) { box.innerHTML = emptyStateHTML(); return; }
-  box.innerHTML = `<div class="msg-col">${lastRendered.map(m => messageHTML(m.role, m.content)).join('')}</div>`;
+  let lastUserId = null;
+  const parts = lastRendered.map(m => {
+    if (m.role === 'user') lastUserId = m.id;
+    return messageHTML(m.role, m.content, false, m.id, lastUserId);
+  });
+  box.innerHTML = `<div class="msg-col">${parts.join('')}</div>`;
   box.scrollTop = box.scrollHeight;
 }
 
@@ -1434,25 +1647,40 @@ function renderSideAvatar() {
   side.innerHTML = `<img src="${esc(userAvatarSrc(currentUser))}" alt="">`;
 }
 
-function messageHTML(role, content, streaming) {
+function messageHTML(role, content, streaming, mid, prevUserId) {
   const isUser = role === 'user';
   const initial = 'AI';
   const userAva = isUser ? `<img src="${esc(userAvatarSrc(currentUser))}" alt="">` : initial;
   const aiAvatar = (!isUser && currentUser && currentUser.assistant_avatar) ? `<img src="${esc(currentUser.assistant_avatar)}" alt="">` : initial;
-  return `<div class="msg-block ${isUser ? 'user' : 'ai'}">
+  const saved = !!mid; // temp-chat bubbles have no DB id -> no edit/truncate actions
+  return `<div class="msg-block ${isUser ? 'user' : 'ai'}" ${saved ? `data-msg="${mid}"` : ''}>
     <div class="m-avatar">${isUser ? userAva : aiAvatar}</div>
     <div class="m-body">
       <div class="m-role">${isUser ? esc(t('you')) : esc(t('assistant'))}</div>
       <div class="m-content ${streaming ? 'stream-target' : ''}">${streaming && !content ? '<span class="typing-dots"><span></span><span></span><span></span></span>' : (isUser ? esc(content) : renderMarkdown(content))}</div>
+      ${isUser && saved && !streaming ? `<div class="m-actions">
+        <button data-edit="${mid}">${ICON_EDIT} ${esc(t('edit_msg'))}</button>
+      </div>` : ''}
       ${!isUser && !streaming ? `<div class="m-actions">
         <button data-copy>${ICON_COPY} ${esc(t('copy'))}</button>
-        <button data-regen>${ICON_REFRESH} ${esc(t('regen'))}</button>
+        <button data-regen="${prevUserId || ''}">${ICON_REFRESH} ${esc(t('regen'))}</button>
       </div>` : ''}
     </div>
   </div>`;
 }
 
 document.addEventListener('click', async (e) => {
+  const cc = e.target.closest('.code-copy');
+  if (cc) {
+    const pre = cc.closest('pre');
+    const code = pre ? pre.querySelector('code') : null;
+    if (code) {
+      await navigator.clipboard.writeText(code.textContent);
+      const old = cc.innerHTML; cc.innerHTML = ICON_COPY + ' ok';
+      setTimeout(() => { cc.innerHTML = old; }, 1200);
+    }
+    return;
+  }
   const copyBtn = e.target.closest('[data-copy]');
   if (copyBtn) {
     const body = copyBtn.closest('.m-body');
@@ -1464,17 +1692,76 @@ document.addEventListener('click', async (e) => {
     return;
   }
   const regenBtn = e.target.closest('[data-regen]');
-  if (regenBtn && !streaming) {
-    const block = regenBtn.closest('.msg-block');
-    const body = block.querySelector('.m-content');
-    const r = await fetch(`/api/chats/${currentChatId}`);
-    const chat = await r.json();
-    const lastUser = [...chat.messages].reverse().find(m => m.role === 'user');
-    if (!lastUser) { toast(t('err_generic'), 'error'); return; }
-    inputMsg.value = lastUser.content;
-    send();
+  if (regenBtn && !streaming && !tempMode && currentChatId) {
+    const anchor = Number(regenBtn.dataset.regen) || null;
+    await truncateAndResend(anchor);
+    return;
+  }
+  const editBtn = e.target.closest('[data-edit]');
+  if (editBtn && !streaming && !tempMode && currentChatId) {
+    openInlineEdit(Number(editBtn.dataset.edit));
+    return;
   }
 });
+
+// edit / regenerate: cut the chat at the anchor user message, then re-send (optimistic or new text)
+async function truncateAndResend(anchorId, textOverride) {
+  let text = textOverride;
+  if (anchorId) {
+    if (text == null) {
+      const anchorPos = lastRendered.findIndex(m => m.id === Number(anchorId));
+      const prevUser = anchorPos > 0 ? [...lastRendered.slice(0, anchorPos)].reverse().find(m => m.role === 'user') : null;
+      text = prevUser ? prevUser.content : null;
+    }
+    const r = await fetch(`/api/chats/${currentChatId}/messages/${anchorId}`, { method: 'DELETE' });
+    if (!r.ok) { toast(terr((await r.json()).error) || t('err_generic'), 'error'); return; }
+  }
+  if (text == null) {
+    const lastUser = [...lastRendered].reverse().find(m => m.role === 'user');
+    text = lastUser ? lastUser.content : null;
+  }
+  if (!text) { toast(t('err_generic'), 'error'); return; }
+  const chat = await (await fetch(`/api/chats/${currentChatId}`)).json(); // view = server truth minus cut tail
+  renderMessages(chat.messages);
+  inputMsg.value = text;
+  await send();
+}
+
+function openInlineEdit(mid) {
+  const block = document.querySelector(`.msg-block[data-msg="${mid}"]`);
+  if (!block || block.querySelector('.m-edit')) return;
+  const content = block.querySelector('.m-content');
+  const original = content.textContent;
+  const wrap = document.createElement('div');
+  wrap.className = 'm-edit';
+  const ta = document.createElement('textarea');
+  ta.rows = Math.min(8, Math.max(2, original.split('\n').length + 1));
+  ta.value = original;
+  const row = document.createElement('div');
+  row.className = 'm-edit-row';
+  const save = document.createElement('button');
+  save.className = 'btn-primary'; save.textContent = t('edit_save');
+  const cancel = document.createElement('button');
+  cancel.className = 'btn-ghost'; cancel.textContent = t('edit_cancel');
+  row.append(cancel, save);
+  wrap.append(ta, row);
+  content.style.display = 'none';
+  content.after(wrap);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  cancel.addEventListener('click', () => { wrap.remove(); content.style.display = ''; });
+  const submit = async () => {
+    const val = ta.value.trim();
+    if (!val) return;
+    wrap.remove(); content.style.display = '';
+    await truncateAndResend(mid, val);
+  };
+  save.addEventListener('click', submit);
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+    if (e.key === 'Escape') { wrap.remove(); content.style.display = ''; }
+  });
+}
 
 // ---------- streaming chat ----------
 const inputMsg = $('#input-msg');
@@ -1694,6 +1981,13 @@ async function send() {
     btnSend.innerHTML = SEND_ICON;
     abortCtrl = null;
     await loadChats();
+    // rebuild bubbles from server truth so they carry message ids (edit/truncate actions)
+    try {
+      const chat = await (await fetch(`/api/chats/${currentChatId}`)).json();
+      if (chat.messages && chat.messages.length) {
+        renderMessages(chat.messages);
+      }
+    } catch (_) {}
     const me = await (await fetch('/api/me')).json();
     if (me.username) { currentUser = me; updateQuota(); afterGuestRefresh(); }
   }
@@ -1954,7 +2248,9 @@ async function loadAdminPanel() {
   $('#set-guest-enabled').checked = !!settings.guest_enabled;
   $('#set-guest-chats').value = settings.guest_max_chats || 10;
   $('#set-guest-minutes').value = settings.guest_max_minutes || 5;
+  $('#set-guest-purge').value = settings.guest_purge_hour ?? 0;
   if (settings.today_usage) $('#admin-today-usage').textContent = t('today_usage', settings.today_usage.t, settings.today_usage.p, settings.today_usage.c);
+  loadAdminStats();
   renderAdminAI();
   await loadAdminUsers();
 }
@@ -2098,7 +2394,8 @@ $('#guest-save').addEventListener('click', async () => {
     body: JSON.stringify({
       guest_enabled: $('#set-guest-enabled').checked,
       guest_max_chats: Number($('#set-guest-chats').value),
-      guest_max_minutes: Number($('#set-guest-minutes').value)
+      guest_max_minutes: Number($('#set-guest-minutes').value),
+      guest_purge_hour: Number($('#set-guest-purge').value)
     })
   });
   const data = await r.json().catch(() => ({}));
@@ -2106,6 +2403,93 @@ $('#guest-save').addEventListener('click', async () => {
   toast(t('guest_saved'), 'success');
   if ($('#login-view').classList.contains('ready')) refreshGuestButton();
 });
+
+// ---------- admin: usage statistics (canvas chart, zero dependency) ----------
+let statCache = null;
+async function loadAdminStats() {
+  const days = $('#stat-days').value || 30;
+  try { statCache = await (await fetch('/api/admin/stats?days=' + days)).json(); } catch (_) { statCache = null; }
+  renderAdminStats();
+}
+$('#stat-days').addEventListener('change', () => loadAdminStats());
+$('#stat-purge-now').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/api/admin/guest-purge-now', { method: 'POST' });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    toast(`${t('stat_purged')} (${d.cleared})`, 'success');
+    loadAdminStats();
+  } catch (_) { toast(t('err_generic'), 'error'); }
+});
+function fmtK(n) { n = Number(n) || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'k' : String(n); }
+function renderAdminStats() {
+  const cards = $('#stat-cards'), charts = $('#stat-chart'), models = $('#stat-models'), users = $('#stat-users');
+  if (!cards || !charts || !statCache) return;
+  const tt = statCache.totals || {};
+  cards.innerHTML = [
+    [t('stat_reqs'), fmtK(tt.reqs)],
+    [t('stat_tok'), fmtK(tt.tok)],
+    [t('stat_prompt'), fmtK(tt.p)],
+    [t('stat_completion'), fmtK(tt.c)],
+    [t('stat_active_users'), statCache.active_users],
+    [t('stat_guest_sessions'), statCache.guest_sessions],
+  ].map(([k, v]) => `<div class="stat-card"><span class="sv">${esc(String(v))}</span><span class="sk">${esc(k)}</span></div>`).join('');
+  renderStatChart();
+  const mx = (statCache.by_model || []).reduce((a, m) => Math.max(a, m.tok || 0), 1);
+  models.innerHTML = '<div class="stat-list-title">' + esc(t('stat_by_model')) + '</div>' +
+    (statCache.by_model || []).map(m => `<div class="stat-bar-row"><span class="sb-name" title="${esc(m.model)}">${esc(m.model)}</span><span class="sb-track"><span class="sb-fill" style="width:${Math.max(2, (m.tok || 0) / mx * 100)}%"></span></span><span class="sb-val">${fmtK(m.tok)}</span></div>`).join('')
+    || '';
+  const ux = (statCache.by_user || []).reduce((a, m) => Math.max(a, m.tok || 0), 1);
+  users.innerHTML = '<div class="stat-list-title">' + esc(t('stat_by_user')) + '</div>' +
+    (statCache.by_user || []).map(u => `<div class="stat-bar-row"><span class="sb-name">${esc(u.username)}</span><span class="sb-track"><span class="sb-fill u" style="width:${Math.max(2, (u.tok || 0) / ux * 100)}%"></span></span><span class="sb-val">${fmtK(u.tok)} · ${u.reqs}×</span></div>`).join('');
+  if (!(statCache.per_day || []).length && !(statCache.by_model || []).length) {
+    models.innerHTML = '<div class="stat-list-title">' + esc(t('stat_no_data')) + '</div>';
+  }
+}
+function renderStatChart() {
+  const cv = $('#stat-chart');
+  if (!cv || !statCache) return;
+  const cs = getComputedStyle(document.body);
+  const days = statCache.days || 30;
+  const byDate = {}; (statCache.per_day || []).forEach(r => { byDate[r.date] = r; });
+  const series = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const row = byDate[key];
+    series.push({ date: key, reqs: row ? Number(row.reqs) || 0 : 0, tok: row ? Number(row.tok) || 0 : 0 });
+  }
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || 320, H = 120;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  const maxR = Math.max(1, ...series.map(s => s.reqs));
+  const padB = 16, padT = 6;
+  const bw = Math.max(2, (W - 8) / days - 3);
+  // grid baseline
+  g.strokeStyle = cs.getPropertyValue('--border') || '#333';
+  g.beginPath(); g.moveTo(0, H - padB + 0.5); g.lineTo(W, H - padB + 0.5); g.stroke();
+  const colA = cs.getPropertyValue('--accent').trim() || '#3b82f6';
+  const colT = cs.getPropertyValue('--success').trim() || '#22c55e';
+  series.forEach((s, i) => {
+    const x = 4 + i * ((W - 8) / days);
+    const hR = Math.round((s.reqs / maxR) * (H - padB - padT));
+    g.fillStyle = colA;
+    g.fillRect(x, H - padB - hR, bw, hR);
+    if (s.tok > 0) {
+      const maxT = Math.max(1, ...series.map(q => q.tok));
+      g.fillStyle = colT + 'AA';
+      const x2 = x + bw + 1;
+      if (x2 + 2 < W) g.fillRect(x2, H - padB - Math.round((s.tok / maxT) * (H - padB - padT)), 2, Math.max(1, Math.round((s.tok / maxT) * (H - padB - padT))));
+    }
+  });
+  g.fillStyle = cs.getPropertyValue('--text-3') || '#777';
+  g.font = '10px Inter, sans-serif';
+  g.fillText(t('stat_reqs') + ' ▮ ' + t('stat_tok') + ' ▮', 2, H - 3);
+}
 
 $('#guest-reset').addEventListener('click', async () => {
   $('#set-guest-enabled').checked = true;
@@ -2504,7 +2888,9 @@ document.addEventListener('keydown', (e) => {
     $('#modal-rename').classList.remove('active');
     $('#modal-quota').classList.remove('active');
     $('#modal-guest').classList.remove('active');
+    $('#modal-settings').classList.remove('active');
     closeModelCombo();
+    closeChatMenu();
   }
 });
 
