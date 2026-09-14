@@ -48,8 +48,6 @@
 | Per-reply usage badge | prompt / completion / total tokens shown under each AI reply |
 | Rename / Delete chats | Via sidebar hover buttons; rename uses custom in-app dialog (bilingual, no native prompt) |
 | **Pin / Archive / Tag / Fork** | Chat "⋯" menu: pin to top, archive to a collapsible "Archived (n)" section, inline #tag, fork = branch copy of the conversation (`(fork)` suffix) |
-| **Reset password (admin)** | Custom in-app modal with validation (min 4 chars, clear on short) — no native `prompt()` anywhere |
-| **Deactivate/Activate guard** | Open WebUI-style warn modal with user name + consequence text (red danger for deactivate, blue/info for activate); action only runs after confirm |
 | **Chat search** | Instant client-side filter by title (sidebar) |
 | Markdown + code blocks | With streaming auto-close fence fix |
 | Copy & Retry | Per-message actions |
@@ -73,6 +71,8 @@
 | User management | Admin: add / delete / reset password / activate / deactivate (self-deletion & self-deactivation blocked server-side) |
 | Instant session revoke | Deactivate or password reset kills sessions immediately |
 | Quota edit & reset | Admin edits any user's daily quota (1–999999) and resets one or all users' usage |
+| **Reset password (admin)** | Custom in-app modal with validation (min 4 chars, clear on short) — no native `prompt()` anywhere |
+| **Deactivate/Activate/Delete guard** | Open WebUI-style warn modals with user name + consequence text (red danger for deactivate/delete, blue/info for activate); actions only run after confirm |
 
 ### Guest Mode (no login)
 
@@ -561,7 +561,8 @@ when the request arrives via HTTPS.
 - **Chat Experience** — smart auto-title after first reply, inline edit & regenerate (truncate +
   resend), highlight.js code blocks with copy button, pin / tag / fork / archive chat menu
 - **Light / dark theme** — sidebar toggle, persisted per browser, hljs + stats chart re-theme live
-| **Usage Statistics (admin)** — 1/7/30/90-day cards, canvas daily-token chart, top models/users bars, purge-now + reset-stats buttons
+- **Usage Statistics (admin)** — 1/7/30/90-day cards, canvas daily-token chart, top models/users
+  bars, purge-now + reset-stats buttons
 - **Scheduled guest purge** — wipes all guest data daily at an admin-set hour (`guest_purge_hour`,
   default 00:00) + manual "Purge guest chats now" button
 - **Guest Mode** — login-free access via a "Try as guest" button; per-guest message limit (1–200)
