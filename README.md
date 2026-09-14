@@ -47,7 +47,7 @@
 | **Token saver** | `max_tokens` reply cap (default 1024), history budget, per-chat **Lean ⚡** toggle (answers without history) |
 | Per-reply usage badge | prompt / completion / total tokens shown under each AI reply |
 | Rename / Delete chats | Via sidebar hover buttons; rename uses custom in-app dialog (bilingual, no native prompt) |
-| **Deep-link URLs** | SPA router (History API): click a chat **title** to reveal/copy its `/c/:id` link (opening a chat normally leaves the bar clean) · `/account` settings · `/admin` dashboard — refresh, bookmark & browser back all work (server catch-all → app; unknown `/api/*` stays JSON 404) |
+| **Deep-link URLs** | SPA router (History API): `/c/:id` lands in the address bar automatically when a reply finishes (ChatGPT/Gemini style; clicking a chat title also reveals it) · `/account` settings · `/admin` dashboard — refresh, bookmark & browser back all work (server catch-all → app; unknown `/api/*` stays JSON 404) |
 | **Share link (public)** | Chat "⋯" → Share: read-only page at `/s/<token>` (`noindex`, XSS-safe snapshot); revoke via warn modal; delete chat = revoke; empty chats blocked (`ERR_EMPTY_SHARE`) |
 | **Pin / Archive / Tag / Fork** | Chat "⋯" menu: pin to top, archive to a collapsible "Archived (n)" section, inline #tag, fork = branch copy of the conversation (`(fork)` suffix) |
 | **Chat search** | Instant client-side filter by title (sidebar) |

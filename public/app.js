@@ -796,6 +796,11 @@ const ICON_X = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stro
 function toast(msg, type = '', ms = 4000) {
   const t = $('#toast');
   if (!t) return;
+  const main = document.querySelector('.main');
+  if (main) {
+    const rc = main.getBoundingClientRect();
+    t.style.left = Math.round(rc.left + rc.width / 2) + 'px';
+  }
   t.textContent = msg;
   t.className = type;
   t.classList.add('show');
@@ -2204,6 +2209,8 @@ async function send() {
     btnSend.innerHTML = SEND_ICON;
     abortCtrl = null;
     await loadChats();
+    // like ChatGPT/Gemini: URL lands in the bar once the reply is finished
+    if (currentChatId && !isGuest()) { try { go('/c/' + currentChatId); } catch (_) {} }
     // rebuild bubbles from server truth so they carry message ids (edit/truncate actions)
     try {
       const chat = await (await fetch(`/api/chats/${currentChatId}`)).json();
