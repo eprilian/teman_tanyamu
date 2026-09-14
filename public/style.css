@@ -194,7 +194,8 @@ input, textarea, select { font-family: inherit; }
 .chat-item .del:hover { color: var(--danger); background: rgba(239,68,68,0.12); }
 .chat-item .del[data-menu]:hover, .chat-item .del[data-rename]:hover { color: var(--text); background: var(--panel-2); }
 .chat-item.pinned .pin-mark { color: var(--accent); vertical-align: 0; margin-right: 2px; }
-.chat-item .chat-tag { color: var(--text-3); font-size: 11px; font-weight: 500; }
+.chat-item .share-mark { font-size: 9px; margin-left: 4px; opacity: .75; }
+.chat-tag { color: var(--text-3); font-size: 11px; font-weight: 500; }
 
 /* chat "more" dropdown (Open WebUI style) */
 .chat-menu {
@@ -539,7 +540,8 @@ input, textarea, select { font-family: inherit; }
   backdrop-filter: blur(2px);
 }
 .modal-backdrop.active { display: flex; animation: fadeIn 140ms ease; }
-#modal-confirm, #modal-rename, #modal-quota, #modal-guest { z-index: 60; }
+#modal-admin, #modal-settings { z-index: 55; }
+#modal-confirm, #modal-rename, #modal-quota, #modal-guest, #modal-warn, #modal-pwreset { z-index: 60; }
 .modal {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 16px; padding: 22px; width: min(460px, 94vw); max-height: 84vh; overflow-y: auto;

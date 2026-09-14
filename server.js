@@ -689,7 +689,7 @@ app.delete('/api/me/model', requireAuth, requireRegistered, requireAdmin, (req, 
 
 // ---------- chats ----------
 app.get('/api/chats', requireAuth, (req, res) => {
-  res.json(db.prepare('SELECT id, title, model, updated_at, lean, pinned, archived, tag, (summary IS NOT NULL AND summary != \'\') AS has_summary FROM chats WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC').all(req.user.id));
+  res.json(db.prepare('SELECT id, title, model, updated_at, lean, pinned, archived, tag, (summary IS NOT NULL AND summary != \'\') AS has_summary, (EXISTS (SELECT 1 FROM shared_chats sc WHERE sc.chat_id = chats.id)) AS shared FROM chats WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC').all(req.user.id));
 });
 
 app.post('/api/chats', requireAuth, (req, res) => {
@@ -709,6 +709,7 @@ app.delete('/api/chats/:id', requireAuth, (req, res) => {
   const chat = db.prepare('SELECT id FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
   db.prepare('DELETE FROM messages WHERE chat_id = ?').run(chat.id);
+  db.prepare('DELETE FROM shared_chats WHERE chat_id = ?').run(chat.id);
   db.prepare('DELETE FROM chats WHERE id = ?').run(chat.id);
   res.json({ ok: true });
 });
@@ -1315,6 +1316,109 @@ app.use((err, req, res, next) => {
     return res.status(500).json({ error: 'Server error: ' + err.message });
   }
   next();
+});
+
+// ---------- public share links (read-only snapshots) ----------
+db.exec(`CREATE TABLE IF NOT EXISTS shared_chats (
+  token TEXT PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+)`);
+const SHARE_RE = /^[a-f0-9]{16}$/;
+function shareLookup(token) {
+  if (!SHARE_RE.test(String(token))) return null;
+  const row = db.prepare('SELECT chat_id FROM shared_chats WHERE token = ?').get(token);
+  if (!row) return null;
+  const chat = db.prepare('SELECT c.id, c.title, c.model, c.updated_at, u.username FROM chats c JOIN users u ON u.id = c.user_id WHERE c.id = ? AND c.user_id > 0').get(row.chat_id);
+  if (!chat) { db.prepare('DELETE FROM shared_chats WHERE token = ?').run(token); return null; }
+  const messages = db.prepare('SELECT role, content, created_at FROM messages WHERE chat_id = ? ORDER BY id').all(chat.id);
+  if (!messages.length) return null;
+  return { title: chat.title, owner: chat.username, model: chat.model, updated_at: chat.updated_at, messages };
+}
+function getShareToken(chatId, userId) {
+  const row = db.prepare('SELECT token FROM shared_chats WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
+  return row ? row.token : null;
+}
+
+app.post('/api/chats/:id/share', requireAuth, requireRegistered, (req, res) => {
+  const chat = db.prepare('SELECT id FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  if (!db.prepare('SELECT 1 FROM messages WHERE chat_id = ? LIMIT 1').get(chat.id)) return res.status(400).json({ error: 'ERR_EMPTY_SHARE' });
+  let token = getShareToken(chat.id, req.user.id);
+  if (!token) {
+    token = crypto.randomBytes(8).toString('hex');
+    db.prepare('INSERT INTO shared_chats (token, chat_id, user_id, created_at) VALUES (?, ?, ?, ?)').run(token, chat.id, req.user.id, Date.now());
+  }
+  res.json({ ok: true, token });
+});
+app.get('/api/chats/:id/share', requireAuth, requireRegistered, (req, res) => {
+  const chat = db.prepare('SELECT id FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  res.json({ token: getShareToken(chat.id, req.user.id) });
+});
+app.delete('/api/chats/:id/share', requireAuth, requireRegistered, (req, res) => {
+  const chat = db.prepare('SELECT id FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  const n = db.prepare('DELETE FROM shared_chats WHERE chat_id = ? AND user_id = ?').run(chat.id, req.user.id).changes;
+  res.json({ ok: true, revoked: n > 0 });
+});
+
+// public read-only share page (no auth, no cookies needed)
+function shareHTML(d) {
+  const escH = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const md = (t) => {
+    let html = escH(t);
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code>${code}</code></pre>`);
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\n/g, '<br>');
+    return html;
+  };
+  const msgs = d.messages.map((m) => {
+    const who = m.role === 'user' ? 'You' : 'AI';
+    return `<div class="msg ${m.role}"><div class="who">${who}</div><div class="body">${md(m.content)}</div></div>`;
+  }).join('\n');
+  return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${escH(d.title)} · Teman Tanyamu</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#09090b;color:#fafafa;font:15px/1.6 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:32px 18px 64px}
+.badge{display:inline-flex;align-items:center;gap:8px;background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.4);color:#93c5fd;border-radius:99px;padding:5px 14px;font-size:12.5px;margin-bottom:14px}
+h1{font-size:21px;margin:6px 0 2px}
+.sub{color:#a1a1aa;font-size:13px;margin-bottom:26px}
+.msg{border:1px solid #27272a;border-radius:14px;padding:14px 16px;margin-bottom:12px;background:#101013}
+.msg.user{background:rgba(59,130,246,.07);border-color:rgba(59,130,246,.25)}
+.who{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#71717a;margin-bottom:6px}
+.msg.user .who{color:#93c5fd}.msg.ai .who{color:#86efac}
+pre{background:#18181b;border:1px solid #27272a;border-radius:10px;padding:12px;overflow-x:auto}
+code{font:13px/1.5 ui-monospace,'Cascadia Mono',Consolas,monospace}
+.body code:not(pre code){background:#18181b;padding:2px 6px;border-radius:5px}
+.foot{margin-top:34px;color:#52525b;font-size:12.5px;text-align:center}
+a{color:#60a5fa}
+</style></head><body><div class="wrap">
+<div class="badge">🔗 Shared chat · read-only</div>
+<h1>${escH(d.title)}</h1>
+<div class="sub">from <b>${escH(d.owner)}</b>'s Teman Tanyamu${d.model ? ' · ' + escH(d.model) : ''}</div>
+${msgs}
+<div class="foot">Dibagikan lewat <a href="/">Teman Tanyamu</a> · konten ini snapshot, tidak diperbarui otomatis</div>
+</div></body></html>`;
+}
+app.get('/s/:token', (req, res) => {
+  const d = shareLookup(req.params.token);
+  res.setHeader('Cache-Control', 'no-store');
+  if (!d) return res.status(404).type('html').send('<!DOCTYPE html><meta charset="utf-8"><title>Not found</title><body style="background:#09090b;color:#fafafa;font-family:sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h2>Link tidak ditemukan</h2><p style="color:#a1a1aa">Link ini sudah dicabut atau tidak pernah ada.</p></div></body>');
+  res.type('html').send(shareHTML(d));
+});
+
+// ---------- SPA fallback: unknown non-API GET -> index.html (client router decides) ----------
+app.use('/api', (req, res) => res.status(404).json({ error: 'ERR_NOT_FOUND' }));
+app.get('/{*splat}', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, () => {

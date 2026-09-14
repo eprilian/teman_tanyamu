@@ -47,6 +47,8 @@
 | **Token saver** | `max_tokens` reply cap (default 1024), history budget, per-chat **Lean ⚡** toggle (answers without history) |
 | Per-reply usage badge | prompt / completion / total tokens shown under each AI reply |
 | Rename / Delete chats | Via sidebar hover buttons; rename uses custom in-app dialog (bilingual, no native prompt) |
+| **Deep-link URLs** | SPA router (History API): `/c/:id` chat · `/account` settings · `/admin` dashboard — refresh, bookmark & browser back all work (server catch-all → app; unknown `/api/*` stays JSON 404) |
+| **Share link (public)** | Chat "⋯" → Share: read-only page at `/s/<token>` (`noindex`, XSS-safe snapshot); revoke via warn modal; delete chat = revoke; empty chats blocked (`ERR_EMPTY_SHARE`) |
 | **Pin / Archive / Tag / Fork** | Chat "⋯" menu: pin to top, archive to a collapsible "Archived (n)" section, inline #tag, fork = branch copy of the conversation (`(fork)` suffix) |
 | **Chat search** | Instant client-side filter by title (sidebar) |
 | Markdown + code blocks | With streaming auto-close fence fix |
@@ -380,7 +382,17 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | PUT | `/api/chats/:id/messages/:msgId` | `{content}` | Edit message content (user messages only) |
 | DELETE | `/api/chats/:id/messages/:msgId` | - | Truncate chat: delete that message + everything after it |
 | PATCH | `/api/chats/:id/lean` | `{lean: bool}` | Toggle lean (no-history) token saver per chat |
-| DELETE | `/api/chats/:id` | - | Delete chat + messages |
+| DELETE | `/api/chats/:id` | - | Delete chat + messages (auto-revokes share links) |
+| POST | `/api/chats/:id/share` | - | Create/read-only share token (400 `ERR_EMPTY_SHARE` on chats with no messages; idempotent) |
+| GET | `/api/chats/:id/share` | - | Current share token or `null` |
+| DELETE | `/api/chats/:id/share` | - | Revoke share link |
+
+### Public pages (no auth)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/s/:token` | Read-only shared-chat HTML page (`noindex`, `no-store`, content escaped) |
+| GET | `/{any SPA path}` | Unknown non-API paths serve the app (client router: `/c/:id`, `/account`, `/admin`); unknown `/api/*` stays JSON 404 |
 
 ### Memory (cross-chat, per user)
 
@@ -475,6 +487,8 @@ chats     (id, user_id, title, model, lean, pinned, archived, tag,
           -- pinned/archived: 0/1; tag: free text (<= 24 chars)
 messages  (id, chat_id, role, content, tokens, created_at)
 usage     (user_id, date, request_count, tokens_used)  -- PK (user_id, date)
+shared_chats (token, chat_id, user_id, created_at)
+          -- token = 16 hex chars, random; read-only public snapshots; revoked on chat delete
 guest_sessions (token, guest_id, msgs_used, started_at, expires_at)
           -- guest chats stored under user_id = -guest_id; wiped on logout / purge
 memories  (id, user_id, content, source, updated_at)  -- cross-chat facts (max 20/user)
@@ -530,6 +544,11 @@ when the request arrives via HTTPS.
   `svg+xml`, no attribute breakout); all user-supplied values escaped at render
 - 9Router API key never sent to browser (server-side proxy only)
 - Per-user chat isolation enforced in every SQL query
+- **Share links**: random 16-hex tokens (unguessable), no auth leakage (server-rendered static HTML,
+  no cookies needed), `noindex` for search engines, `no-store`, chat content HTML-escaped (no script
+  injection); revoke + delete-chat cleanup keep zero orphan rows; empty chats cannot be shared
+- **SPA fallback** serves only a constant file path (`public/index.html`) — no user input reaches
+  `sendFile`; API namespace protected with explicit JSON 404 before the catch-all
 - Model policy enforced server-side (not just hidden in UI)
 - Guest mode: chat/time limits enforced server-side **before** the AI call; guests blocked from all
   account endpoints (`ERR_GUEST_NOPE`); guest chats isolated under negative user ids and excluded
@@ -557,6 +576,11 @@ when the request arrives via HTTPS.
 ## Changelog
 
 ### v1.0-beta (current)
+
+- **Deep-link URLs** — `/c/:id` chat, `/account`, `/admin`; browser back/refresh/bookmark work
+  (History API + server SPA fallback; unknown `/api/*` still JSON 404)
+- **Share links** — read-only public chat pages at `/s/:token` (create/revoke from chat ⋯ menu,
+  clipboard copy, `noindex`, XSS-safe snapshot; empty chats blocked; deleting a chat revokes links)
 
 - **Chat Experience** — smart auto-title after first reply, inline edit & regenerate (truncate +
   resend), highlight.js code blocks with copy button, pin / tag / fork / archive chat menu

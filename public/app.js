@@ -37,10 +37,26 @@ const I18N = {
     edit_save: 'Send',
     edit_cancel: 'Cancel',
     delete_msg: 'Delete & regenerate',
-    stat_purge_now: 'Purge guest chats now',
+    stat_purge_now: 'Purge guest chat',
+    warn_purge_title: 'Purge guest chats?',
+    warn_purge_text: 'All guest sessions, chats and messages will be deleted permanently right now. Real user accounts are not touched.',
+    warn_qreset_title: 'Reset daily quota?',
+    warn_qreset_text: (n) => `${n}'s used quota for today will be set back to 0. The daily limit itself is not changed.`,
+    warn_mem_title: 'Clear all memory?',
+    warn_mem_text: 'All facts the AI remembers about you across chats will be deleted. This cannot be undone.',
+    warn_do_purge: 'Purge now', warn_do_reset: 'Reset', warn_do_clear: 'Clear',
+    share_chat: 'Share', unshare_chat: 'Revoke share link',
+    share_on: 'Public share link created', share_off: 'Share link revoked',
+    share_copied: 'Link copied to clipboard', share_fail: 'Could not create the link',
+    share_notfound: 'Chat not found — it may have been deleted',
+    chat_locked: "You don't have permission to open that chat",
+    nav_off_guest: 'Sign in first to open that page',
+    warn_unshare_title: 'Revoke share link?',
+    warn_unshare_text: 'The public link for this chat will stop working immediately for anyone who has it.',
+    warn_do_revoke: 'Revoke',
     stat_purged: 'Guest chats purged',
     stat_title: 'Usage Statistics',
-    stat_sub: (n) => `Last ${n} days across all users.`,
+    stat_sub: (n) => `Last ${n} day${n == 1 ? '' : 's'} across all users.`,
     stat_days: 'Period (days)',
     stat_reqs: 'Requests',
     stat_tok: 'Tokens',
@@ -305,7 +321,23 @@ const I18N = {
     edit_save: 'Kirim',
     edit_cancel: 'Batal',
     delete_msg: 'Hapus & buat ulang',
-    stat_purge_now: 'Hapus chat tamu sekarang',
+    stat_purge_now: 'Hapus chat tamu',
+    warn_purge_title: 'Hapus chat tamu?',
+    warn_purge_text: 'Semua sesi, chat, dan pesan tamu akan dihapus permanen sekarang juga. Akun user asli tidak tersentuh.',
+    warn_qreset_title: 'Reset kuota harian?',
+    warn_qreset_text: (n) => `Pemakaian kuota ${n} hari ini akan dikembalikan ke 0. Batas hariannya tidak berubah.`,
+    warn_mem_title: 'Bersihkan semua memori?',
+    warn_mem_text: 'Semua fakta yang AI ingat tentang kamu lintas chat akan dihapus. Tidak bisa dibatalkan.',
+    warn_do_purge: 'Hapus sekarang', warn_do_reset: 'Reset', warn_do_clear: 'Bersihkan',
+    share_chat: 'Bagikan', unshare_chat: 'Cabut link berbagi',
+    share_on: 'Link publik dibuat', share_off: 'Link berbagi dicabut',
+    share_copied: 'Link disalin ke clipboard', share_fail: 'Gagal membuat link',
+    share_notfound: 'Chat tidak ditemukan — mungkin sudah dihapus',
+    chat_locked: 'Kamu tidak punya izin membuka chat itu',
+    nav_off_guest: 'Masuk dulu untuk membuka halaman itu',
+    warn_unshare_title: 'Cabut link berbagi?',
+    warn_unshare_text: 'Link publik chat ini langsung tidak bisa dibuka lagi oleh siapa pun yang menyimpannya.',
+    warn_do_revoke: 'Cabut',
     stat_purged: 'Chat tamu dihapus',
     stat_title: 'Statistik Penggunaan',
     stat_sub: (n) => `Terakhir ${n} hari untuk semua user.`,
@@ -575,6 +607,7 @@ const ERR_MAP = {
   ERR_RATE_LIMITED: { en: 'Too many attempts. Try again in', id: 'Terlalu banyak percobaan. Coba lagi dalam' },
   ERR_RATE_LIMITED_SEC: { en: 'seconds.', id: 'detik.' },
   ERR_BAD_PURGE_HOUR: { en: 'Purge hour must be 0-23', id: 'Jam hapus harus 0-23' },
+  ERR_EMPTY_SHARE: { en: 'Nothing to share yet — this chat has no messages', id: 'Belum bisa dibagikan — chat ini belum ada pesan' },
   LOGIN_REMAINING: { en: (n) => (n > 1 ? `${n} attempts remaining` : '1 attempt remaining'), id: (n) => (n > 1 ? `${n} percobaan tersisa` : '1 percobaan tersisa') },
 };
 function terr(code) {
@@ -927,6 +960,7 @@ $('#login-form').addEventListener('submit', async (e) => {
     return;
   }
   await enterApp();
+  try { routeFromURL(); } catch (e) { console.warn('post-login route:', e); }
   } catch (err) {
     console.error('[TT] login flow error:', err);
     const el = $('#login-error');
@@ -960,6 +994,8 @@ $('#logout-ok').addEventListener('click', async () => {
   $('#chat-search').value = '';
   $('#messages').innerHTML = '';
   $('#modal-admin').classList.remove('active');
+  history.replaceState({}, '', '/');
+  document.title = 'Teman Tanyamu';
   refreshGuestButton();
   $('#login-user').focus();
 });
@@ -1010,6 +1046,72 @@ function updateModelBadge() {
 }
 
 function isGuest() { return !!(currentUser && currentUser.guest); }
+
+// ---------- SPA router: / , /c/:id , /account , /admin (Open WebUI style URLs) ----------
+function closePanels() {
+  $('#modal-admin').classList.remove('active');
+  $('#modal-settings').classList.remove('active');
+}
+function openSettingsPage() {
+  if (isGuest()) { toast(terr('ERR_GUEST_NOPE'), 'error'); return; }
+  $('#modal-settings').classList.add('active');
+  $('#settings-username').textContent = t('settings_as', currentUser.username);
+  renderSettingsAvatar();
+  renderWallpaperPresets();
+  renderMemoryFacts();
+}
+function openAdminPage() {
+  if (isGuest() || !currentUser || currentUser.role !== 'admin') { toast(t('nav_off_guest'), 'error'); goReplace('/'); return; }
+  $('#modal-admin').classList.add('active');
+  loadRouterConfig();
+  loadAdminPanel();
+}
+function routeFromURL() {
+  const p = location.pathname;
+  if (!currentUser) return; // login view stays; after login we re-route
+  if (isGuest() && p !== '/') { toast(t('nav_off_guest'), 'error'); goReplace('/'); return; }
+  if (p === '/login') { goReplace('/'); return; }
+  const m = p.match(/^\/c\/(\d+)$/);
+  if (m) {
+    closePanels();
+    const id = Number(m[1]);
+    if (id === currentChatId) return;
+    if (isGuest()) { toast(t('nav_off_guest'), 'error'); goReplace('/'); return; }
+    if (!chats.some(c => c.id === id)) { toast(t('share_notfound'), 'error'); goReplace('/'); return; }
+    openChat(id).catch(() => { toast(t('share_notfound'), 'error'); goReplace('/'); });
+    return;
+  }
+  if (p === '/account') {
+    $('#modal-admin').classList.remove('active');
+    if (!$('#modal-settings').classList.contains('active')) openSettingsPage();
+    return;
+  }
+  if (p === '/admin') {
+    $('#modal-settings').classList.remove('active');
+    if (!$('#modal-admin').classList.contains('active')) openAdminPage();
+    return;
+  }
+  closePanels();
+}
+function go(path) {
+  if (location.pathname !== path) history.pushState({}, '', path);
+  routeFromURL();
+}
+function goReplace(path) {
+  if (location.pathname !== path) history.replaceState({}, '', path);
+  routeFromURL();
+}
+window.addEventListener('popstate', () => { try { routeFromURL(); } catch (e) { console.warn('popstate route:', e); } });
+async function copyText(txt) {
+  try { await navigator.clipboard.writeText(txt); return true; } catch (_) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove(); return !!ok;
+  } catch (_) { return false; }
+}
 
 let guestCountdownIv = null;
 function fmtMMSS(sec) {
@@ -1086,6 +1188,8 @@ function goLoginFromGuest() {
   $('#messages').innerHTML = '';
   $('#modal-admin').classList.remove('active');
   $('#modal-settings').classList.remove('active');
+  history.replaceState({}, '', '/');
+  document.title = 'Teman Tanyamu';
   refreshGuestButton();
   $('#login-user').focus();
 }
@@ -1350,7 +1454,7 @@ function chatItemHTML(c) {
   return `
     <div class="chat-item ${c.id === currentChatId ? 'active' : ''} ${c.pinned ? 'pinned' : ''}" data-id="${c.id}" role="button" tabindex="0">
       <span class="ico">${c.lean ? '<span class="lean-dot" title="' + esc(t('lean_badge')) + '">⚡</span>' : ICON_CHAT}</span>
-      <span class="title">${c.pinned ? '<span class="pin-mark"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4l6 6-3.5 1-3.5 5-2-2-5 3.5L3 22l1-1 1-1 4.5-3.5-2-2 5-3.5L16 7z"/></svg></span>' : ''}${esc(c.title)}${c.tag ? ' <span class="chat-tag">#' + esc(c.tag) + '</span>' : ''}</span>
+      <span class="title">${c.pinned ? '<span class="pin-mark"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4l6 6-3.5 1-3.5 5-2-2-5 3.5L3 22l1-1 1-1 4.5-3.5-2-2 5-3.5L16 7z"/></svg></span>' : ''}${esc(c.title)}${c.shared ? '<span class="share-mark" title="' + esc(t('unshare_chat')) + '">🔗</span>' : ''}${c.tag ? ' <span class="chat-tag">#' + esc(c.tag) + '</span>' : ''}</span>
       <button class="del" data-menu="${c.id}" aria-label="…" title="…">${ICON_DOTS}</button>
       <button class="del" data-rename="${c.id}" aria-label="${esc(t('rename_chat'))} ${esc(c.title)}" title="${esc(t('rename_chat'))}">✎</button>
       <button class="del" data-del="${c.id}" aria-label="${esc(t('del_chat'))} ${esc(c.title)}" title="${esc(t('del_chat'))}">✕</button>
@@ -1371,7 +1475,8 @@ function openChatMenu(id, anchor) {
     ['fork', t('fork_chat'), svg('<circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M6 9v1a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9"/><line x1="12" y1="12" x2="12" y2="15"/>')],
     ['arch', c.archived ? t('unarchive_chat') : t('archive_chat'), c.archived
       ? svg('<polyline points="20.5 11 12 3 3.5 11"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>')
-      : svg('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/>')]
+      : svg('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/>')],
+    [c.shared ? 'unshare' : 'share', c.shared ? t('unshare_chat') : t('share_chat'), svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>')]
   ];
   menu.innerHTML = items.map(([act, label, ic]) =>
     `<button class="cm-item" data-cm="${act}" data-cmid="${id}"><span class="cm-ic">${ic}</span>${esc(label)}</button>`).join('');
@@ -1415,6 +1520,28 @@ async function chatMenuAction(id, act) {
     toast(t('fork_chat'), 'success');
   } else if (act === 'tag') {
     openTagModal(id);
+  } else if (act === 'share') {
+    try {
+      const r = await fetch(`/api/chats/${id}/share`, { method: 'POST' });
+      if (!r.ok) { toast(terr((await r.json().catch(() => ({}))).error) || t('share_fail'), 'error'); return; }
+      const d = await r.json();
+      const url = location.origin + '/s/' + d.token;
+      const copied = await copyText(url);
+      await loadChats();
+      toast(copied ? t('share_copied') : t('share_on'), 'success');
+      if (!copied) setTimeout(() => toast(url, 'success', 6000), 400);
+    } catch (_) { toast(t('share_fail'), 'error'); }
+  } else if (act === 'unshare') {
+    openWarn({
+      title: t('warn_unshare_title'),
+      text: t('warn_unshare_text'),
+      okLabel: t('warn_do_revoke'),
+      onOk: async () => {
+        await fetch(`/api/chats/${id}/share`, { method: 'DELETE' });
+        await loadChats();
+        toast(t('share_off'), 'success');
+      }
+    });
   }
 }
 async function loadChats() {
@@ -1466,7 +1593,11 @@ $('#chat-list').addEventListener('click', async (e) => {
   }
   if (e.target.closest('#arch-toggle')) { showArchived = !showArchived; loadChats(); return; }
   const item = e.target.closest('.chat-item');
-  if (item) await openChat(Number(item.dataset.id));
+  if (item) {
+    const id = Number(item.dataset.id);
+    await openChat(id);
+    if (!isGuest()) go('/c/' + id);
+  }
 });
 
 // tag editor: small inline row inside the chat item (no new modal needed)
@@ -1687,6 +1818,7 @@ $('#btn-new-chat').addEventListener('click', async () => {
   $('#messages').innerHTML = emptyStateHTML();
   await loadChats();
   closeMobileSidebar();
+  if (!isGuest()) go('/c/' + chat.id);
   $('#input-msg').focus();
 });
 
@@ -1699,6 +1831,7 @@ async function openChat(id) {
   localStorage.setItem('model', chat.model);
   updateModelBadge();
   const row = chats.find(c => c.id === id);
+  document.title = (row ? row.title : chat.title || 'Chat') + ' · Teman Tanyamu';
   chatLean = !!(row && row.lean);
   applyLeanUI();
   renderMessages(chat.messages);
@@ -2175,10 +2308,17 @@ async function addMemoryFact() {
 }
 $('#memory-add-btn').addEventListener('click', addMemoryFact);
 $('#memory-add-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addMemoryFact(); } });
-$('#memory-clear-btn').addEventListener('click', async () => {
-  await fetch('/api/memory/clear', { method: 'POST' });
-  toast(t('memory_cleared'), 'success');
-  await renderMemoryFacts();
+$('#memory-clear-btn').addEventListener('click', () => {
+  openWarn({
+    title: t('warn_mem_title'),
+    text: t('warn_mem_text'),
+    okLabel: t('warn_do_clear'),
+    onOk: async () => {
+      await fetch('/api/memory/clear', { method: 'POST' });
+      toast(t('memory_cleared'), 'success');
+      await renderMemoryFacts();
+    }
+  });
 });
 
 // ---------- sidebar minimize/maximize toggle (desktop) ----------
@@ -2228,11 +2368,9 @@ $('#sidebar-backdrop').addEventListener('click', closeMobileSidebar);
 let allModelsCache = [];
 
 $('#btn-admin').addEventListener('click', async () => {
-  $('#modal-admin').classList.add('active');
-  loadRouterConfig();
-  await loadAdminPanel();
+  go('/admin');
 });
-$('#admin-close').addEventListener('click', () => $('#modal-admin').classList.remove('active'));
+$('#admin-close').addEventListener('click', () => { $('#modal-admin').classList.remove('active'); if (location.pathname === '/admin') goReplace('/'); });
 
 let routerCfg = null;
 function renderRouterStatus() {
@@ -2377,7 +2515,7 @@ async function loadAdminUsers() {
         <div class="td-actions">
           <button class="btn-ghost admin-action" data-quota="${u.id}" data-quota-val="${u.daily_quota}" data-uname="${esc(u.username)}">${esc(t('admin_edit_quota'))}</button>
           <button class="btn-ghost admin-action" data-resetpw="${u.id}" data-uname="${esc(u.username)}">${esc(t('admin_resetpw'))}</button>
-          <button class="btn-ghost admin-action" data-resetquota="${u.id}">${esc(t('admin_reset_quota'))}</button>
+          <button class="btn-ghost admin-action" data-resetquota="${u.id}" data-uname="${esc(u.username)}">${esc(t('admin_reset_quota'))}</button>
           <button class="btn-ghost admin-action" data-toggle-active="${u.id}" data-uname="${esc(u.username)}" data-active="${u.active ? 1 : 0}" ${isSelf ? 'disabled title="' + esc(t('admin_self_deactivate')) + '"' : ''}>${u.active ? esc(t('admin_deactivate')) : esc(t('admin_activate'))}</button>
           ${u.username !== 'admin' ? `<button class="icon-btn danger" data-del-user="${u.id}" data-uname="${esc(u.username)}" title="${esc(t('admin_user_deleted'))}" aria-label="Delete ${esc(u.username)}">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -2404,14 +2542,24 @@ $('#admin-users').addEventListener('click', async (e) => {
   }
   const quotaBtn = e.target.closest('[data-resetquota]');
   if (quotaBtn) {
-    const r = await fetch(`/api/admin/users/${quotaBtn.dataset.resetquota}/reset-quota`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' }
+    const uid = Number(quotaBtn.dataset.resetquota);
+    const uname = quotaBtn.dataset.uname;
+    openWarn({
+      danger: false,
+      title: t('warn_qreset_title'),
+      text: t('warn_qreset_text', uname),
+      okLabel: t('warn_do_reset'),
+      onOk: async () => {
+        const r = await fetch(`/api/admin/users/${uid}/reset-quota`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await r.json();
+        if (!r.ok) { toast(terr(data.error), 'error'); return; }
+        toast(t('admin_quota_reset_ok'), 'success');
+        await loadAdminUsers();
+      }
     });
-    const data = await r.json();
-    if (!r.ok) { toast(terr(data.error), 'error'); return; }
-    toast(t('admin_quota_reset_ok'), 'success');
-    await loadAdminUsers();
     return;
   }
   const toggleBtn = e.target.closest('[data-toggle-active]');
@@ -2508,14 +2656,21 @@ $('#stat-reset-usage').addEventListener('click', () => {
     }
   });
 });
-$('#stat-purge-now').addEventListener('click', async () => {
-  try {
-    const r = await fetch('/api/admin/guest-purge-now', { method: 'POST' });
-    if (!r.ok) throw new Error();
-    const d = await r.json();
-    toast(`${t('stat_purged')} (${d.cleared})`, 'success');
-    loadAdminStats();
-  } catch (_) { toast(t('err_generic'), 'error'); }
+$('#stat-purge-now').addEventListener('click', () => {
+  openWarn({
+    title: t('warn_purge_title'),
+    text: t('warn_purge_text'),
+    okLabel: t('warn_do_purge'),
+    onOk: async () => {
+      try {
+        const r = await fetch('/api/admin/guest-purge-now', { method: 'POST' });
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        toast(`${t('stat_purged')} (${d.cleared})`, 'success');
+        loadAdminStats();
+      } catch (_) { toast(t('err_generic'), 'error'); }
+    }
+  });
 });
 function fmtK(n) { n = Number(n) || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'k' : String(n); }
 function renderAdminStats() {
@@ -2811,14 +2966,14 @@ const WALLPAPER_PRESETS = [
 
 $('#btn-settings').addEventListener('click', async () => {
   if (isGuest()) { toast(terr('ERR_GUEST_NOPE'), 'error'); return; }
-  $('#modal-settings').classList.add('active');
-  $('#settings-username').textContent = t('settings_as', currentUser.username);
-  renderSettingsAvatar();
-  renderWallpaperPresets();
-  renderMemoryFacts();
+  go('/account');
 });
 
-$('#settings-close').addEventListener('click', () => $('#modal-settings').classList.remove('active'));
+$('#avatar-init').addEventListener('click', () => $('#btn-settings').click());
+$('#settings-close').addEventListener('click', () => { $('#modal-settings').classList.remove('active'); if (location.pathname === '/account') goReplace('/'); });
+// click outside (backdrop) closes admin + settings panels, like other modals
+$('#modal-admin').addEventListener('click', (e) => { if (e.target === e.currentTarget) { $('#modal-admin').classList.remove('active'); if (location.pathname === '/admin') goReplace('/'); } });
+$('#modal-settings').addEventListener('click', (e) => { if (e.target === e.currentTarget) { $('#modal-settings').classList.remove('active'); if (location.pathname === '/account') goReplace('/'); } });
 
 function renderSettingsAvatar() {
   const el = $('#settings-avatar-preview');
@@ -2995,6 +3150,7 @@ document.addEventListener('keydown', (e) => {
     $('#modal-settings').classList.remove('active');
     $('#modal-warn').classList.remove('active'); pendingWarn = null;
     $('#modal-pwreset').classList.remove('active'); pendingPwUserId = null;
+    if (location.pathname === '/account' || location.pathname === '/admin') goReplace('/');
     closeModelCombo();
     closeChatMenu();
   }
@@ -3028,7 +3184,7 @@ console.log('[TT] app v1.0-beta.6 fresh-load');
   try { enhanceModelSelects(); } catch(e) { console.warn('combo boot:', e); }
   try { applyTempUI(); } catch(e) { console.warn('temp boot:', e); }
 
-  if (user) await enterApp();
+  if (user) { await enterApp(); try { routeFromURL(); } catch (e) { console.warn('boot route:', e); } }
   else refreshGuestButton();
 })();
 
