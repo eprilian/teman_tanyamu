@@ -1132,7 +1132,22 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     SELECT COUNT(DISTINCT user_id) n FROM usage WHERE date >= date('now',?) AND user_id > 0`).get('-' + (days - 1) + ' day');
   const guestSessions = db.prepare(`
     SELECT COUNT(*) n FROM guest_sessions WHERE started_at >= (strftime('%s', 'now', ?) * 1000)`).get('-' + (days - 1) + ' day');
-  res.json({ days, per_day: perDay, by_user: byUser, by_model: byModel, totals, active_users: activeUsers.n, guest_sessions: guestSessions.n });
+  let perHour = null;
+  if (days === 1) {
+    // hourly buckets of TODAY (local time), one assistant message = one request
+    const rows = db.prepare(`
+      SELECT strftime('%H', m.created_at, 'localtime') h, COUNT(*) reqs, COALESCE(SUM(m.tokens),0) tok
+      FROM messages m JOIN chats c ON c.id = m.chat_id
+      WHERE m.role='assistant' AND c.user_id > 0 AND date(m.created_at, 'localtime') = date('now', 'localtime')
+      GROUP BY h`).all();
+    const byH = {}; rows.forEach(x => { byH[x.h] = x; });
+    perHour = [];
+    for (let i = 0; i < 24; i++) {
+      const key = String(i).padStart(2, '0');
+      perHour.push({ h: key, reqs: byH[key] ? Number(byH[key].reqs) : 0, tok: byH[key] ? Number(byH[key].tok) : 0 });
+    }
+  }
+  res.json({ days, per_day: perDay, per_hour: perHour, by_user: byUser, by_model: byModel, totals, active_users: activeUsers.n, guest_sessions: guestSessions.n });
 });
 
 // ---------- admin: model gateway (Open WebUI style: base URL + API key) ----------

@@ -47,7 +47,7 @@
 | **Token saver** | `max_tokens` reply cap (default 1024), history budget, per-chat **Lean ⚡** toggle (answers without history) |
 | Per-reply usage badge | prompt / completion / total tokens shown under each AI reply |
 | Rename / Delete chats | Via sidebar hover buttons; rename uses custom in-app dialog (bilingual, no native prompt) |
-| **Deep-link URLs** | SPA router (History API): `/c/:id` chat · `/account` settings · `/admin` dashboard — refresh, bookmark & browser back all work (server catch-all → app; unknown `/api/*` stays JSON 404) |
+| **Deep-link URLs** | SPA router (History API): click a chat **title** to reveal/copy its `/c/:id` link (opening a chat normally leaves the bar clean) · `/account` settings · `/admin` dashboard — refresh, bookmark & browser back all work (server catch-all → app; unknown `/api/*` stays JSON 404) |
 | **Share link (public)** | Chat "⋯" → Share: read-only page at `/s/<token>` (`noindex`, XSS-safe snapshot); revoke via warn modal; delete chat = revoke; empty chats blocked (`ERR_EMPTY_SHARE`) |
 | **Pin / Archive / Tag / Fork** | Chat "⋯" menu: pin to top, archive to a collapsible "Archived (n)" section, inline #tag, fork = branch copy of the conversation (`(fork)` suffix) |
 | **Chat search** | Instant client-side filter by title (sidebar) |
@@ -101,7 +101,7 @@
 
 ### Usage Statistics (Admin)
 
-Period-filterable dashboard (1 / 7 / 30 / 90 days): card row (requests, total/prompt/completion tokens, active users, guest sessions), a canvas bar chart of daily tokens (no chart library, re-themes with light/dark), top-10 bars by model and by user, plus **Purge guest chats now** and **Reset usage stats** (danger confirm modal). Endpoints: `GET /api/admin/stats?days=N` (1–365), `POST /api/admin/guest-purge-now`, `PUT /api/admin/reset-usage`.
+Compact dashboard: period as segmented pills (1d/7d/30d/90d, default 1d) beside Purge/Reset action buttons. Card row (requests, total/prompt/completion tokens, active users, guest sessions) + a canvas bar chart (no chart library, re-themes light/dark) whose x-axis shows **hour labels (00:00–21:00) for 1d** and **date labels (dd/mm) for 7/30/90d**. Top-10 model & user rankings sit side by side in a 2-column grid with rank numbers, inline bars and token+request meta per row. Endpoints: `GET /api/admin/stats?days=N` (1–365), `POST /api/admin/guest-purge-now`, `PUT /api/admin/reset-usage`.
 
 ### Models
 
@@ -577,8 +577,10 @@ when the request arrives via HTTPS.
 
 ### v1.0-beta (current)
 
-- **Deep-link URLs** — `/c/:id` chat, `/account`, `/admin`; browser back/refresh/bookmark work
-  (History API + server SPA fallback; unknown `/api/*` still JSON 404)
+- **Deep-link URLs** — click a chat title for `/c/:id` (address bar stays clean otherwise);
+  `/account` & `/admin` deep links; browser back/refresh/bookmark work (SPA fallback; `/api/*` 404 JSON)
+- **Stats polish** — segmented period pills (1/7/30/90d) with hour/date chart axis labels,
+  2-column ranked model+user panels, purge-hour as a clock-style HH:00 dropdown
 - **Share links** — read-only public chat pages at `/s/:token` (create/revoke from chat ⋯ menu,
   clipboard copy, `noindex`, XSS-safe snapshot; empty chats blocked; deleting a chat revokes links)
 

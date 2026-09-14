@@ -246,24 +246,61 @@ input, textarea, select { font-family: inherit; }
 }
 .stat-card .sv { font-size: 17px; font-weight: 700; color: var(--text); }
 .stat-card .sk { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
+/* --- usage statistics toolbar: compact segmented pills + actions --- */
+.stat-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.stat-actions { display: flex; gap: 6px; }
+.stat-actions .btn-ghost {
+  padding: 5px 10px; font-size: 11.5px; border-radius: 7px; line-height: 1.3;
+  background: transparent; border: 1px solid var(--border); color: var(--text-2);
+}
+.stat-actions .btn-ghost:hover { background: var(--elev); color: var(--text); }
+.seg {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--elev); border: 1px solid var(--border); border-radius: 9px;
+}
+.seg-btn {
+  appearance: none; border: none; background: transparent; cursor: pointer;
+  padding: 4px 12px; border-radius: 6px; font-size: 11.5px; font-weight: 600;
+  color: var(--text-3); transition: background 120ms, color 120ms; line-height: 1.4;
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active { background: var(--accent); color: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
 .stat-chart-wrap {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
   padding: 10px; margin-bottom: 10px;
 }
-#stat-chart { width: 100%; height: 120px; display: block; }
-.stat-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+#stat-chart { width: 100%; height: 128px; display: block; }
+.stat-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; min-width: 0; }
+.stat-list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .stat-list-title {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--text-3); font-weight: 600; margin: 6px 0 2px;
 }
-.stat-bar-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.stat-bar-row .sb-name {
-  width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2);
+.stat-list-meta { font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.stat-list-empty { font-size: 12px; color: var(--text-3); padding: 10px 2px; }
+/* professional two-column ranking panel */
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+@media (max-width: 640px) { .stat-grid { grid-template-columns: 1fr; } }
+.stat-bars { display: flex; flex-direction: column; gap: 3px; }
+.sb-row {
+  display: grid; grid-template-columns: 18px minmax(70px, 128px) 1fr auto;
+  align-items: center; gap: 8px; font-size: 12px; padding: 3px 4px; border-radius: 7px;
 }
-.stat-bar-row .sb-track { flex: 1; height: 7px; background: var(--elev); border-radius: 9999px; overflow: hidden; }
-.stat-bar-row .sb-fill { display: block; height: 100%; background: var(--accent); border-radius: 9999px; transition: width 200ms; }
-.stat-bar-row .sb-fill.u { background: var(--success); }
-.stat-bar-row .sb-val { width: 64px; text-align: right; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.sb-row:hover { background: var(--elev); }
+.sb-rank {
+  font-size: 10px; font-weight: 700; color: var(--text-3); text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.sb-row:nth-child(1) .sb-rank { color: var(--accent); }
+.sb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.sb-track { height: 6px; background: var(--elev); border-radius: 9999px; overflow: hidden; }
+.sb-fill { display: block; height: 100%; background: var(--accent); border-radius: 9999px; transition: width 200ms; }
+.sb-fill.u { background: var(--success); }
+.sb-val {
+  min-width: 62px; text-align: right; color: var(--text); font-weight: 600;
+  font-variant-numeric: tabular-nums; display: flex; flex-direction: column; line-height: 1.25;
+}
+.sb-val em { font-style: normal; font-size: 10px; font-weight: 400; color: var(--text-3); }
 
 /* code highlighting (highlight.js) inside chat */
 .m-content pre { position: relative; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 12px; overflow-x: auto; margin: 8px 0; }

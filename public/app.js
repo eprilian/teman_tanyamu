@@ -65,11 +65,12 @@ const I18N = {
     stat_active_users: 'Active users',
     stat_guest_sessions: 'Guest sessions',
     stat_per_day: 'Requests & tokens per day',
+    stat_per_hour: 'Requests & tokens per hour — today',
     stat_by_model: 'Tokens by model',
     stat_by_user: 'Top users by tokens',
     stat_no_data: 'No usage data in this period.',
     guest_purge_hour: 'Auto-delete guest chats daily at',
-    guest_purge_sub: 'Hour (0-23) in server local time',
+    guest_purge_sub: 'Clock time (HH:00), server local time',
     guest_purged_toast: 'Guest cleanup settings saved',
     login_title: 'Welcome to Teman Tanyamu',
     login_sub: 'Sign in to continue your conversation',
@@ -349,11 +350,12 @@ const I18N = {
     stat_active_users: 'User aktif',
     stat_guest_sessions: 'Sesi tamu',
     stat_per_day: 'Permintaan & token per hari',
+    stat_per_hour: 'Permintaan & token per jam — hari ini',
     stat_by_model: 'Token per model',
     stat_by_user: 'Top user by token',
     stat_no_data: 'Belum ada data pada periode ini.',
     guest_purge_hour: 'Hapus chat tamu otomatis tiap hari pukul',
-    guest_purge_sub: 'Jam (0-23) waktu lokal server',
+    guest_purge_sub: 'Format jam (HH:00), waktu lokal server',
     guest_purged_toast: 'Pengaturan hapus tamu tersimpan',
     login_title: 'Selamat datang di Teman Tanyamu',
     login_sub: 'Masuk untuk melanjutkan percakapan',
@@ -681,8 +683,7 @@ function applyI18N() {
     setT('#admin-stat-title', t('stat_title'));
     setT('#stat-purge-now', t('stat_purge_now'));
     setT('#stat-reset-usage', t('stat_reset_usage'));
-    setT('#admin-stat-sub', t('stat_sub', Number($('#stat-days') ? $('#stat-days').value : 30)));
-    setT('#lbl-stat-days', t('stat_days'));
+    setT('#admin-stat-sub', t('stat_sub', Number($('#stat-days .seg-btn.active') ? $('#stat-days .seg-btn.active').dataset.days : 1)));
     setT('#lbl-guest-purge', t('guest_purge_hour'));
     setTitle('#btn-theme', t('theme_toggle')); setA('#btn-theme', 'aria-label', t('theme_toggle'));
     setT('#form-add-user button[type="submit"]', t('admin_add_btn'));
@@ -1596,7 +1597,7 @@ $('#chat-list').addEventListener('click', async (e) => {
   if (item) {
     const id = Number(item.dataset.id);
     await openChat(id);
-    if (!isGuest()) go('/c/' + id);
+    if (!isGuest() && e.target.closest('.title')) go('/c/' + id);
   }
 });
 
@@ -1818,7 +1819,7 @@ $('#btn-new-chat').addEventListener('click', async () => {
   $('#messages').innerHTML = emptyStateHTML();
   await loadChats();
   closeMobileSidebar();
-  if (!isGuest()) go('/c/' + chat.id);
+  if (!isGuest() && location.pathname !== '/') goReplace('/');
   $('#input-msg').focus();
 });
 
@@ -2468,7 +2469,17 @@ async function loadAdminPanel() {
   $('#set-guest-enabled').checked = !!settings.guest_enabled;
   $('#set-guest-chats').value = settings.guest_max_chats || 10;
   $('#set-guest-minutes').value = settings.guest_max_minutes || 5;
-  $('#set-guest-purge').value = settings.guest_purge_hour ?? 0;
+  {
+    const ph = $('#set-guest-purge');
+    if (ph && !ph.options.length) {
+      for (let i = 0; i < 24; i++) {
+        const o = document.createElement('option');
+        o.value = String(i); o.textContent = String(i).padStart(2, '0') + ':00';
+        ph.appendChild(o);
+      }
+    }
+    if (ph) ph.value = String(Math.min(23, Math.max(0, Number(settings.guest_purge_hour) || 0)));
+  }
   if (settings.today_usage) $('#admin-today-usage').textContent = t('today_usage', settings.today_usage.t, settings.today_usage.p, settings.today_usage.c);
   loadAdminStats();
   renderAdminAI();
@@ -2636,12 +2647,18 @@ $('#guest-save').addEventListener('click', async () => {
 // ---------- admin: usage statistics (canvas chart, zero dependency) ----------
 let statCache = null;
 async function loadAdminStats() {
-  const days = $('#stat-days').value || 30;
+  const days = ($('#stat-days .seg-btn.active') || {}).dataset ? Number($('#stat-days .seg-btn.active').dataset.days) : 1;
   const sub = $('#admin-stat-sub'); if (sub) sub.textContent = t('stat_sub', Number(days));
   try { statCache = await (await fetch('/api/admin/stats?days=' + days)).json(); } catch (_) { statCache = null; }
   renderAdminStats();
 }
-$('#stat-days').addEventListener('change', () => loadAdminStats());
+$('#stat-days').addEventListener('click', (e) => {
+  const b = e.target.closest('.seg-btn');
+  if (!b) return;
+  $('#stat-days').querySelectorAll('.seg-btn').forEach(x => { x.classList.toggle('active', x === b); x.setAttribute('aria-selected', x === b ? 'true' : 'false'); });
+  const sub = $('#admin-stat-sub'); if (sub) sub.textContent = t('stat_sub', Number(b.dataset.days));
+  loadAdminStats();
+});
 $('#stat-reset-usage').addEventListener('click', () => {
   openWarn({
     title: t('stat_reset_usage'),
@@ -2686,58 +2703,86 @@ function renderAdminStats() {
     [t('stat_guest_sessions'), statCache.guest_sessions],
   ].map(([k, v]) => `<div class="stat-card"><span class="sv">${esc(String(v))}</span><span class="sk">${esc(k)}</span></div>`).join('');
   renderStatChart();
-  const mx = (statCache.by_model || []).reduce((a, m) => Math.max(a, m.tok || 0), 1);
-  models.innerHTML = '<div class="stat-list-title">' + esc(t('stat_by_model')) + '</div>' +
-    (statCache.by_model || []).map(m => `<div class="stat-bar-row"><span class="sb-name" title="${esc(m.model)}">${esc(m.model)}</span><span class="sb-track"><span class="sb-fill" style="width:${Math.max(2, (m.tok || 0) / mx * 100)}%"></span></span><span class="sb-val">${fmtK(m.tok)}</span></div>`).join('')
-    || '';
-  const ux = (statCache.by_user || []).reduce((a, m) => Math.max(a, m.tok || 0), 1);
-  users.innerHTML = '<div class="stat-list-title">' + esc(t('stat_by_user')) + '</div>' +
-    (statCache.by_user || []).map(u => `<div class="stat-bar-row"><span class="sb-name">${esc(u.username)}</span><span class="sb-track"><span class="sb-fill u" style="width:${Math.max(2, (u.tok || 0) / ux * 100)}%"></span></span><span class="sb-val">${fmtK(u.tok)} · ${u.reqs}×</span></div>`).join('');
-  if (!(statCache.per_day || []).length && !(statCache.by_model || []).length) {
-    models.innerHTML = '<div class="stat-list-title">' + esc(t('stat_no_data')) + '</div>';
-  }
+  const barList = (rows, nameKey, label, colorCls, extra) => {
+    const mx = rows.reduce((a, m) => Math.max(a, m.tok || 0), 1);
+    const head = `<div class="stat-list-head"><span class="stat-list-title">${esc(label)}</span><span class="stat-list-meta">${rows.length}</span></div>`;
+    if (!rows.length) return head + `<div class="stat-list-empty">${esc(t('stat_no_data'))}</div>`;
+    return head + '<div class="stat-bars">' + rows.map((m, i) => `
+      <div class="sb-row">
+        <span class="sb-rank">${i + 1}</span>
+        <span class="sb-name" title="${esc(m[nameKey])}">${esc(m[nameKey])}</span>
+        <span class="sb-track"><span class="sb-fill ${colorCls}" style="width:${Math.max(2, (m.tok || 0) / mx * 100)}%"></span></span>
+        <span class="sb-val">${fmtK(m.tok)}<em>${esc(extra(m))}</em></span>
+      </div>`).join('') + '</div>';
+  };
+  models.innerHTML = barList(statCache.by_model || [], 'model', t('stat_by_model'), '', m => `${m.msgs || 0} msg`);
+  users.innerHTML = barList(statCache.by_user || [], 'username', t('stat_by_user'), 'u', u => `${u.reqs} req`);
 }
 function renderStatChart() {
   const cv = $('#stat-chart');
   if (!cv || !statCache) return;
   const cs = getComputedStyle(document.body);
   const days = statCache.days || 30;
-  const byDate = {}; (statCache.per_day || []).forEach(r => { byDate[r.date] = r; });
+  const hourMode = days === 1 && Array.isArray(statCache.per_hour) && statCache.per_hour.length === 24;
+  const title = $('#stat-chart-title');
+  if (title) title.textContent = hourMode ? t('stat_per_hour') : t('stat_per_day');
   const series = [];
-  const today = new Date();
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today); d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    const row = byDate[key];
-    series.push({ date: key, reqs: row ? Number(row.reqs) || 0 : 0, tok: row ? Number(row.tok) || 0 : 0 });
+  if (hourMode) {
+    statCache.per_hour.forEach(r => series.push({ label: r.h + ':00', tick: r.h + ':00', reqs: Number(r.reqs) || 0, tok: Number(r.tok) || 0, showTick: Number(r.h) % 3 === 0 }));
+  } else {
+    const byDate = {}; (statCache.per_day || []).forEach(r => { byDate[r.date] = r; });
+    const today = new Date();
+    const step = days <= 7 ? 1 : days <= 31 ? 5 : 10;
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(today); d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const row = byDate[key];
+      series.push({
+        label: key,
+        tick: days <= 31 ? `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}` : key.slice(5),
+        reqs: row ? Number(row.reqs) || 0 : 0,
+        tok: row ? Number(row.tok) || 0 : 0,
+        showTick: (i % step === 0)
+      });
+    }
   }
   const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 320, H = 120;
+  const W = cv.clientWidth || 320, H = 128;
   cv.width = W * dpr; cv.height = H * dpr;
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
   const maxR = Math.max(1, ...series.map(s => s.reqs));
-  const padB = 16, padT = 6;
-  const bw = Math.max(2, (W - 8) / days - 3);
-  // grid baseline
+  const maxT = Math.max(1, ...series.map(s => s.tok));
+  const padT = 6, axisY = H - 22;
+  const slot = (W - 6) / series.length;
+  const bw = Math.max(2, slot - 3);
   g.strokeStyle = cs.getPropertyValue('--border') || '#333';
-  g.beginPath(); g.moveTo(0, H - padB + 0.5); g.lineTo(W, H - padB + 0.5); g.stroke();
+  g.beginPath(); g.moveTo(0, axisY + 0.5); g.lineTo(W, axisY + 0.5); g.stroke();
   const colA = cs.getPropertyValue('--accent').trim() || '#3b82f6';
   const colT = cs.getPropertyValue('--success').trim() || '#22c55e';
   series.forEach((s, i) => {
-    const x = 4 + i * ((W - 8) / days);
-    const hR = Math.round((s.reqs / maxR) * (H - padB - padT));
+    const x = 3 + i * slot;
+    const hR = Math.round((s.reqs / maxR) * (axisY - padT));
     g.fillStyle = colA;
-    g.fillRect(x, H - padB - hR, bw, hR);
+    g.fillRect(x, axisY - hR, bw, hR);
     if (s.tok > 0) {
-      const maxT = Math.max(1, ...series.map(q => q.tok));
       g.fillStyle = colT + 'AA';
       const x2 = x + bw + 1;
-      if (x2 + 2 < W) g.fillRect(x2, H - padB - Math.round((s.tok / maxT) * (H - padB - padT)), 2, Math.max(1, Math.round((s.tok / maxT) * (H - padB - padT))));
+      if (x2 + 2 < W) g.fillRect(x2, axisY - Math.round((s.tok / maxT) * (axisY - padT)), 2, Math.max(1, Math.round((s.tok / maxT) * (axisY - padT))));
     }
   });
+  // x labels
   g.fillStyle = cs.getPropertyValue('--text-3') || '#777';
+  g.font = '9px Inter, sans-serif';
+  g.textAlign = 'center';
+  series.forEach((s, i) => {
+    if (!s.showTick) return;
+    const x = 3 + i * slot + bw / 2;
+    if (x > W - 12) return;
+    g.fillText(s.tick, x, axisY + 11);
+  });
+  g.textAlign = 'left';
   g.font = '10px Inter, sans-serif';
   g.fillText(t('stat_reqs') + ' ▮ ' + t('stat_tok') + ' ▮', 2, H - 3);
 }

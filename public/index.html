@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teman Tanyamu</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="stylesheet" href="/style.css?v=1.0-beta.17">
+<link rel="stylesheet" href="/style.css?v=1.0-beta.18">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hljs-css">
 <script src="/vendor/highlight.min.js" defer></script>
 </head>
@@ -294,26 +294,32 @@
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
       <div>
         <label for="set-guest-purge" id="lbl-guest-purge">Auto-delete guest chats daily at</label>
-        <input id="set-guest-purge" type="number" value="0" min="0" max="23" step="1">
+        <select id="set-guest-purge"></select>
       </div>
     </div>
     <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
     <h3 style="font-size:13.5px;" id="admin-stat-title">Usage Statistics</h3>
     <p class="modal-sub" style="margin-bottom:8px;" id="admin-stat-sub">Last 30 days across all users.</p>
-    <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-      <label for="stat-days" id="lbl-stat-days" style="margin:0; font-size:12px;">Period (days)</label>
-      <select id="stat-days" style="width:auto; min-width:140px; padding:6px 12px; font-size:12.5px;">
-        <option value="1" selected>1</option><option value="7">7</option><option value="30">30</option><option value="90">90</option>
-      </select>
+    <div class="stat-toolbar" style="margin-bottom:8px;">
+      <div class="seg" id="stat-days" role="tablist" aria-label="Period">
+        <button type="button" class="seg-btn active" data-days="1" role="tab">1d</button>
+        <button type="button" class="seg-btn" data-days="7" role="tab">7d</button>
+        <button type="button" class="seg-btn" data-days="30" role="tab">30d</button>
+        <button type="button" class="seg-btn" data-days="90" role="tab">90d</button>
+      </div>
+      <div class="stat-actions">
+        <button class="btn-ghost" id="stat-purge-now">Purge guest chat</button>
+        <button class="btn-ghost danger-ghost" id="stat-reset-usage">Reset usage stats</button>
+      </div>
     </div>
     <div class="stat-cards" id="stat-cards"></div>
-    <div class="stat-chart-wrap"><canvas id="stat-chart" height="120"></canvas></div>
-    <div id="stat-models" class="stat-list"></div>
-    <div id="stat-users" class="stat-list"></div>
-    <div style="display:flex; gap:8px; margin-top:4px;">
-      <button class="btn-ghost" id="stat-purge-now" style="padding:5px 10px; font-size:11.5px; border-radius:7px;">Purge guest chat</button>
-      <button class="btn-ghost danger-ghost" id="stat-reset-usage" style="padding:5px 10px; font-size:11.5px; border-radius:7px;">Reset usage stats</button>
+    <div class="stat-list-head" style="margin-top:2px"><span class="stat-list-title" id="stat-chart-title">Requests & tokens per day</span></div>
+    <div class="stat-chart-wrap"><canvas id="stat-chart" height="128"></canvas></div>
+    <div class="stat-grid">
+      <div id="stat-models" class="stat-list"></div>
+      <div id="stat-users" class="stat-list"></div>
     </div>
+
     <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
     <h3 style="font-size:13.5px;" id="admin-add-title">Add User</h3>
     <form id="form-add-user">
@@ -405,6 +411,6 @@
 
 <div id="toast" role="status"></div>
 
-<script src="/app.js?v=1.0-beta.17"></script>
+<script src="/app.js?v=1.0-beta.18"></script>
 </body>
 </html>
