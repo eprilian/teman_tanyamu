@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teman Tanyamu</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="stylesheet" href="/style.css?v=1.0-beta.12">
+<link rel="stylesheet" href="/style.css?v=1.0-beta.15">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hljs-css">
 <script src="/vendor/highlight.min.js" defer></script>
 </head>
@@ -148,6 +148,32 @@
   </div>
 </div>
 
+<!-- MODAL: generic danger/warn confirm (Open WebUI style, i18n) -->
+<div class="modal-backdrop" id="modal-warn">
+  <div class="modal">
+    <div class="warn-head"><span class="warn-ic" id="warn-ic"></span><h3 id="warn-title" style="margin:0;">Are you sure?</h3></div>
+    <p class="modal-sub" id="warn-text" style="margin-top:6px;"></p>
+    <div class="row">
+      <button class="btn-ghost" id="warn-cancel">Cancel</button>
+      <button class="btn-danger" id="warn-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: admin reset password -->
+<div class="modal-backdrop" id="modal-pwreset">
+  <div class="modal">
+    <h3 id="pwreset-title">Reset password</h3>
+    <label for="pwreset-input" id="pwreset-label">New password</label>
+    <input id="pwreset-input" type="text" autocomplete="off" spellcheck="false">
+    <p class="modal-sub" id="pwreset-hint" style="margin-top:6px;">min 4 chars</p>
+    <div class="row">
+      <button class="btn-ghost" id="pwreset-cancel">Cancel</button>
+      <button class="btn-primary" id="pwreset-ok">Reset</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: rename chat -->
 <div class="modal-backdrop" id="modal-rename">
   <div class="modal">
@@ -277,14 +303,17 @@
     <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
       <label for="stat-days" id="lbl-stat-days" style="margin:0; font-size:12px;">Period (days)</label>
       <select id="stat-days" style="width:auto; padding:6px 10px; font-size:12.5px;">
-        <option value="7">7</option><option value="30" selected>30</option><option value="90">90</option>
+        <option value="1">1</option><option value="7">7</option><option value="30" selected>30</option><option value="90">90</option>
       </select>
     </div>
     <div class="stat-cards" id="stat-cards"></div>
     <div class="stat-chart-wrap"><canvas id="stat-chart" height="120"></canvas></div>
     <div id="stat-models" class="stat-list"></div>
     <div id="stat-users" class="stat-list"></div>
-    <button class="btn-ghost" id="stat-purge-now" style="padding:5px 10px; font-size:11.5px; border-radius:7px; margin-top:4px;">Purge guest chats now</button>
+    <div style="display:flex; gap:8px; margin-top:4px;">
+      <button class="btn-ghost" id="stat-purge-now" style="padding:5px 10px; font-size:11.5px; border-radius:7px;">Purge guest chats now</button>
+      <button class="btn-ghost danger-ghost" id="stat-reset-usage" style="padding:5px 10px; font-size:11.5px; border-radius:7px;">Reset usage stats</button>
+    </div>
     <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
     <h3 style="font-size:13.5px;" id="admin-add-title">Add User</h3>
     <form id="form-add-user">
@@ -376,6 +405,6 @@
 
 <div id="toast" role="status"></div>
 
-<script src="/app.js?v=1.0-beta.12"></script>
+<script src="/app.js?v=1.0-beta.15"></script>
 </body>
 </html>

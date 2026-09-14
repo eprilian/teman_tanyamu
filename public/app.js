@@ -12,6 +12,14 @@ let focusMode = localStorage.getItem('focusMode') === '1'; // lean global for te
 // ---------- i18n (default: English) ----------
 const I18N = {
   en: {
+    pwreset_title: 'Reset password', pwreset_label: 'New password', pwreset_hint: 'At least 4 characters', pwreset_ok: 'Reset',
+    warn_del_title: 'Delete user?',
+    warn_del_text: 'USER and all their chats, messages and usage data are permanently removed. This cannot be undone.',
+    admin_del_user: 'Delete user',
+    warn_deact_title: 'Deactivate account?', warn_deact_text: 'USER will no longer be able to sign in until reactivated. Existing chats are kept.',
+    warn_act_title: 'Reactivate account?', warn_act_text: 'USER will be able to sign in again.',
+    warn_confirm: 'Confirm', warn_cancel: 'Cancel',
+    stat_reset_usage: 'Reset usage stats', stat_reset_confirm: 'This erases the usage counters of ALL users for ALL days (the statistics dashboard will be empty). Chats and accounts are not touched.',
     theme_toggle: 'Toggle theme',
     theme_dark: 'Dark',
     theme_light: 'Light',
@@ -32,7 +40,7 @@ const I18N = {
     stat_purge_now: 'Purge guest chats now',
     stat_purged: 'Guest chats purged',
     stat_title: 'Usage Statistics',
-    stat_sub: 'Last {0} days across all users.',
+    stat_sub: (n) => `Last ${n} days across all users.`,
     stat_days: 'Period (days)',
     stat_reqs: 'Requests',
     stat_tok: 'Tokens',
@@ -272,6 +280,14 @@ const I18N = {
     search_none: 'No chats match',
   },
   id: {
+    pwreset_title: 'Reset kata sandi', pwreset_label: 'Kata sandi baru', pwreset_hint: 'Minimal 4 karakter', pwreset_ok: 'Reset',
+    warn_del_title: 'Hapus user?',
+    warn_del_text: 'USER beserta semua chat, pesan, dan data penggunaannya hilang permanen. Tidak bisa dibatalkan.',
+    admin_del_user: 'Hapus user',
+    warn_deact_title: 'Nonaktifkan akun?', warn_deact_text: 'USER tidak akan bisa masuk sampai diaktifkan lagi. Chat yang ada tetap tersimpan.',
+    warn_act_title: 'Aktifkan kembali akun?', warn_act_text: 'USER akan bisa masuk lagi seperti biasa.',
+    warn_confirm: 'Ya, lanjutkan', warn_cancel: 'Batal',
+    stat_reset_usage: 'Reset statistik penggunaan', stat_reset_confirm: 'Ini menghapus counter penggunaan SEMUA user untuk SEMUA hari (dashboard statistik akan kosong). Chat dan akun tidak tersentuh.',
     theme_toggle: 'Ganti tema',
     theme_dark: 'Gelap',
     theme_light: 'Terang',
@@ -292,7 +308,7 @@ const I18N = {
     stat_purge_now: 'Hapus chat tamu sekarang',
     stat_purged: 'Chat tamu dihapus',
     stat_title: 'Statistik Penggunaan',
-    stat_sub: 'Terakhir {0} hari untuk semua user.',
+    stat_sub: (n) => `Terakhir ${n} hari untuk semua user.`,
     stat_days: 'Periode (hari)',
     stat_reqs: 'Permintaan',
     stat_tok: 'Token',
@@ -631,6 +647,7 @@ function applyI18N() {
     setT('#admin-close', t('admin_close'));
     setT('#admin-stat-title', t('stat_title'));
     setT('#stat-purge-now', t('stat_purge_now'));
+    setT('#stat-reset-usage', t('stat_reset_usage'));
     setT('#admin-stat-sub', t('stat_sub', Number($('#stat-days') ? $('#stat-days').value : 30)));
     setT('#lbl-stat-days', t('stat_days'));
     setT('#lbl-guest-purge', t('guest_purge_hour'));
@@ -1296,7 +1313,12 @@ function closeModelCombo(combo) {
 }
 
 document.addEventListener('click', () => closeModelCombo());
-document.addEventListener('scroll', () => { closeModelCombo(); closeChatMenu(); }, true);
+document.addEventListener('scroll', (e) => {
+  // scrolling INSIDE the open popup (model list / chat menu) must not close it
+  const el = e.target;
+  if (el && el.nodeType === 1 && el.closest && (el.closest('.model-combo-pop') || el.closest('.chat-menu'))) return;
+  closeModelCombo(); closeChatMenu();
+}, true);
 
 $('#model-select').addEventListener('change', async (e) => {
   const model = e.target.value;
@@ -1554,6 +1576,66 @@ $('#quota-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); submitQuota(); }
 });
 $('#modal-quota').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeQuotaModal(); });
+
+// ---------- generic warn/danger confirm (Open WebUI style, i18n) ----------
+const ICON_WARN_TRI = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+const ICON_USER_UP = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="10" y1="11" x2="16" y2="11"/></svg>';
+let pendingWarn = null;
+function openWarn(opts) {
+  $('#warn-title').textContent = opts.title;
+  $('#warn-text').textContent = opts.text;
+  $('#warn-cancel').textContent = t('warn_cancel');
+  $('#warn-ok').textContent = opts.okLabel || t('warn_confirm');
+  $('#warn-ic').innerHTML = opts.danger === false ? ICON_USER_UP : ICON_WARN_TRI;
+  $('#warn-ic').className = 'warn-ic' + (opts.danger === false ? ' blue' : '');
+  $('#warn-ok').className = opts.danger === false ? 'btn-primary' : 'btn-danger';
+  pendingWarn = opts.onOk || null;
+  $('#modal-warn').classList.add('active');
+  setTimeout(() => $('#warn-ok').focus(), 60);
+}
+function closeWarn() { $('#modal-warn').classList.remove('active'); pendingWarn = null; }
+$('#warn-cancel').addEventListener('click', closeWarn);
+$('#modal-warn').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeWarn(); });
+$('#warn-ok').addEventListener('click', async () => {
+  const fn = pendingWarn;
+  closeWarn();
+  if (fn) await fn();
+});
+
+// ---------- admin: reset password modal (no native prompt) ----------
+let pendingPwUserId = null;
+function openPwResetModal(id, uname) {
+  pendingPwUserId = id;
+  $('#pwreset-title').textContent = t('pwreset_title') + ' — ' + uname;
+  $('#pwreset-label').textContent = t('pwreset_label');
+  $('#pwreset-hint').textContent = t('pwreset_hint');
+  $('#pwreset-cancel').textContent = t('cancel');
+  $('#pwreset-ok').textContent = t('pwreset_ok');
+  $('#pwreset-input').value = '';
+  $('#modal-pwreset').classList.add('active');
+  setTimeout(() => { $('#pwreset-input').focus(); }, 60);
+}
+function closePwResetModal() { $('#modal-pwreset').classList.remove('active'); pendingPwUserId = null; }
+async function submitPwReset() {
+  if (pendingPwUserId == null) return;
+  const id = pendingPwUserId;
+  const pw = $('#pwreset-input').value;
+  if (!pw) { toast(terr('ERR_FIELDS_REQUIRED'), 'error'); return; }
+  if (pw.length < 4) { toast(terr('ERR_PW_SHORT'), 'error'); return; }
+  closePwResetModal();
+  const r = await fetch(`/api/admin/users/${id}/password`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw })
+  });
+  const data = await r.json();
+  if (!r.ok) { toast(terr(data.error) || terr('ERR_GENERIC'), 'error'); return; }
+  toast(t('admin_pw_reset_ok'), 'success');
+}
+$('#pwreset-cancel').addEventListener('click', closePwResetModal);
+$('#pwreset-ok').addEventListener('click', submitPwReset);
+$('#pwreset-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitPwReset(); } });
+$('#modal-pwreset').addEventListener('click', (e) => { if (e.target === e.currentTarget) closePwResetModal(); });
 
 $('#confirm-cancel').addEventListener('click', () => {
   $('#modal-confirm').classList.remove('active');
@@ -2296,8 +2378,8 @@ async function loadAdminUsers() {
           <button class="btn-ghost admin-action" data-quota="${u.id}" data-quota-val="${u.daily_quota}" data-uname="${esc(u.username)}">${esc(t('admin_edit_quota'))}</button>
           <button class="btn-ghost admin-action" data-resetpw="${u.id}" data-uname="${esc(u.username)}">${esc(t('admin_resetpw'))}</button>
           <button class="btn-ghost admin-action" data-resetquota="${u.id}">${esc(t('admin_reset_quota'))}</button>
-          <button class="btn-ghost admin-action" data-toggle-active="${u.id}" data-active="${u.active ? 1 : 0}" ${isSelf ? 'disabled title="' + esc(t('admin_self_deactivate')) + '"' : ''}>${u.active ? esc(t('admin_deactivate')) : esc(t('admin_activate'))}</button>
-          ${u.username !== 'admin' ? `<button class="icon-btn danger" data-del-user="${u.id}" title="${esc(t('admin_user_deleted'))}" aria-label="Delete ${esc(u.username)}">
+          <button class="btn-ghost admin-action" data-toggle-active="${u.id}" data-uname="${esc(u.username)}" data-active="${u.active ? 1 : 0}" ${isSelf ? 'disabled title="' + esc(t('admin_self_deactivate')) + '"' : ''}>${u.active ? esc(t('admin_deactivate')) : esc(t('admin_activate'))}</button>
+          ${u.username !== 'admin' ? `<button class="icon-btn danger" data-del-user="${u.id}" data-uname="${esc(u.username)}" title="${esc(t('admin_user_deleted'))}" aria-label="Delete ${esc(u.username)}">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>` : ''}
         </div>
@@ -2312,17 +2394,7 @@ async function loadAdminUsers() {
 $('#admin-users').addEventListener('click', async (e) => {
   const resetBtn = e.target.closest('[data-resetpw]');
   if (resetBtn) {
-    const newPw = prompt(`[${resetBtn.dataset.uname}] ` + t('pw_new') + ' (min 4):');
-    if (!newPw) return;
-    if (newPw.length < 4) { toast(terr('ERR_PW_SHORT'), 'error'); return; }
-    const r = await fetch(`/api/admin/users/${resetBtn.dataset.resetpw}/password`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: newPw })
-    });
-    const data = await r.json();
-    if (!r.ok) { toast(terr(data.error), 'error'); return; }
-    toast(t('admin_pw_reset_ok'), 'success');
+    openPwResetModal(Number(resetBtn.dataset.resetpw), resetBtn.dataset.uname);
     return;
   }
   const quotaEditBtn = e.target.closest('[data-quota]');
@@ -2344,16 +2416,25 @@ $('#admin-users').addEventListener('click', async (e) => {
   }
   const toggleBtn = e.target.closest('[data-toggle-active]');
   if (toggleBtn) {
+    const uid = Number(toggleBtn.dataset.toggleActive);
+    const uname = toggleBtn.dataset.uname;
     const active = toggleBtn.dataset.active === '1';
-    const r = await fetch(`/api/admin/users/${toggleBtn.dataset.toggleActive}/active`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active: !active })
+    openWarn({
+      danger: !active ? false : true,
+      title: active ? t('warn_deact_title') : t('warn_act_title'),
+      text: (active ? t('warn_deact_text') : t('warn_act_text')).replace(/USER/g, uname),
+      onOk: async () => {
+        const r = await fetch(`/api/admin/users/${uid}/active`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ active: !active })
+        });
+        const data = await r.json();
+        if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
+        toast(!active ? t('admin_activated') : t('admin_deactivated'), 'success');
+        await loadAdminUsers();
+      }
     });
-    const data = await r.json();
-    if (!r.ok) { toast(data.error, 'error'); return; }
-    toast(!active ? t('admin_activated') : t('admin_deactivated'), 'success');
-    await loadAdminUsers();
     return;
   }
 });
@@ -2408,10 +2489,25 @@ $('#guest-save').addEventListener('click', async () => {
 let statCache = null;
 async function loadAdminStats() {
   const days = $('#stat-days').value || 30;
+  const sub = $('#admin-stat-sub'); if (sub) sub.textContent = t('stat_sub', Number(days));
   try { statCache = await (await fetch('/api/admin/stats?days=' + days)).json(); } catch (_) { statCache = null; }
   renderAdminStats();
 }
 $('#stat-days').addEventListener('change', () => loadAdminStats());
+$('#stat-reset-usage').addEventListener('click', () => {
+  openWarn({
+    title: t('stat_reset_usage'),
+    text: t('stat_reset_confirm'),
+    okLabel: t('stat_reset_usage'),
+    onOk: async () => {
+      const r = await fetch('/api/admin/reset-usage', { method: 'PUT' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(terr(data.error) || t('err_generic'), 'error'); return; }
+      toast(t('admin_reset_all_ok'), 'success');
+      loadAdminPanel();
+    }
+  });
+});
 $('#stat-purge-now').addEventListener('click', async () => {
   try {
     const r = await fetch('/api/admin/guest-purge-now', { method: 'POST' });
@@ -2669,10 +2765,18 @@ $('#admin-users').addEventListener('click', async (e) => {
   }
   const btn = e.target.closest('[data-del-user]');
   if (!btn) return;
-  if (!confirm(t('confirm_title'))) return;
-  await fetch(`/api/admin/users/${btn.dataset.delUser}`, { method: 'DELETE' });
-  await loadAdminUsers();
-  toast(t('admin_user_deleted'), 'success');
+  const uid = Number(btn.dataset.delUser);
+  const uname = btn.dataset.uname || '';
+  openWarn({
+    title: t('warn_del_title'),
+    text: t('warn_del_text').replace(/USER/g, uname),
+    okLabel: t('admin_del_user'),
+    onOk: async () => {
+      await fetch(`/api/admin/users/${uid}`, { method: 'DELETE' });
+      await loadAdminUsers();
+      toast(t('admin_user_deleted'), 'success');
+    }
+  });
 });
 
 $('#form-add-user').addEventListener('submit', async (e) => {
@@ -2889,6 +2993,8 @@ document.addEventListener('keydown', (e) => {
     $('#modal-quota').classList.remove('active');
     $('#modal-guest').classList.remove('active');
     $('#modal-settings').classList.remove('active');
+    $('#modal-warn').classList.remove('active'); pendingWarn = null;
+    $('#modal-pwreset').classList.remove('active'); pendingPwUserId = null;
     closeModelCombo();
     closeChatMenu();
   }

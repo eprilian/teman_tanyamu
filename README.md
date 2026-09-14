@@ -48,6 +48,8 @@
 | Per-reply usage badge | prompt / completion / total tokens shown under each AI reply |
 | Rename / Delete chats | Via sidebar hover buttons; rename uses custom in-app dialog (bilingual, no native prompt) |
 | **Pin / Archive / Tag / Fork** | Chat "⋯" menu: pin to top, archive to a collapsible "Archived (n)" section, inline #tag, fork = branch copy of the conversation (`(fork)` suffix) |
+| **Reset password (admin)** | Custom in-app modal with validation (min 4 chars, clear on short) — no native `prompt()` anywhere |
+| **Deactivate/Activate guard** | Open WebUI-style warn modal with user name + consequence text (red danger for deactivate, blue/info for activate); action only runs after confirm |
 | **Chat search** | Instant client-side filter by title (sidebar) |
 | Markdown + code blocks | With streaming auto-close fence fix |
 | Copy & Retry | Per-message actions |
@@ -97,7 +99,7 @@
 
 ### Usage Statistics (Admin)
 
-Last-30/60/90-days dashboard: card row (requests, total/prompt/completion tokens, active users, guest sessions), a canvas bar chart of daily tokens (no chart library, re-themes with light/dark), and top-10 bars by model and by user. Endpoints: `GET /api/admin/stats?days=30`, `POST /api/admin/guest-purge-now`.
+Period-filterable dashboard (1 / 7 / 30 / 90 days): card row (requests, total/prompt/completion tokens, active users, guest sessions), a canvas bar chart of daily tokens (no chart library, re-themes with light/dark), top-10 bars by model and by user, plus **Purge guest chats now** and **Reset usage stats** (danger confirm modal). Endpoints: `GET /api/admin/stats?days=N` (1–365), `POST /api/admin/guest-purge-now`, `PUT /api/admin/reset-usage`.
 
 ### Models
 
@@ -414,7 +416,7 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | PUT | `/api/admin/users/:id/model` | `{model\|null}` | Per-user model override |
 | POST | `/api/admin/avatar` | `{userId, avatar\|null}` | Upload / reset any user's avatar (self-sync immediate) |
 | POST | `/api/admin/assistant-avatar` | `{avatar\|null}` | Global assistant (AI) avatar for all users |
-| GET | `/api/admin/stats` | `?days=7\|30\|90` | Usage statistics: totals, per-day series, top models/users, guest sessions |
+| GET | `/api/admin/stats` | `?days=1..365` (def 30) | Usage statistics: totals, per-day series, top models/users, guest sessions |
 | POST | `/api/admin/guest-purge-now` | - | Purge all guest data immediately |
 | GET | `/api/admin/settings` | - | Global settings + today's token totals (prompt/completion) |
 | PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, memory_enabled?, timeout_ms?, guest_enabled?, guest_max_chats?, guest_max_minutes?, guest_purge_hour?}` | Update settings (budget 200–32000, reply cap 64–8192, timeout 30–600 s, guest chats 1–200, guest minutes 1–60, purge hour 0–23) |
@@ -559,7 +561,7 @@ when the request arrives via HTTPS.
 - **Chat Experience** — smart auto-title after first reply, inline edit & regenerate (truncate +
   resend), highlight.js code blocks with copy button, pin / tag / fork / archive chat menu
 - **Light / dark theme** — sidebar toggle, persisted per browser, hljs + stats chart re-theme live
-- **Usage Statistics (admin)** — 7/30/90-day cards, canvas daily-token chart, top models/users bars
+| **Usage Statistics (admin)** — 1/7/30/90-day cards, canvas daily-token chart, top models/users bars, purge-now + reset-stats buttons
 - **Scheduled guest purge** — wipes all guest data daily at an admin-set hour (`guest_purge_hour`,
   default 00:00) + manual "Purge guest chats now" button
 - **Guest Mode** — login-free access via a "Try as guest" button; per-guest message limit (1–200)

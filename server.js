@@ -1107,7 +1107,7 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
 
 // ---------- admin: usage statistics ----------
 app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
-  const days = Math.min(90, Math.max(7, Number(req.query.days) || 30));
+  const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
   // last N days calendar (local date labels)
   const perDay = db.prepare(`
     SELECT date, SUM(request_count) reqs, SUM(tokens_used) tok, SUM(prompt_tokens) p, SUM(completion_tokens) c
