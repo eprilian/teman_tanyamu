@@ -87,7 +87,7 @@
 | Server-enforced | Limits checked before the AI call; rejected sends roll back their bubbles (nothing stored); expired sessions can't post to any account endpoint (`ERR_GUEST_NOPE`) |
 | Session persistence | Cookie `gtoken` (HttpOnly, 24 h); chat history kept during the session, survives reload; re-clicking guest mints a fresh session |
 | Clean stats | Guest messages never touch the `usage` table — admin statistics stay per-real-user |
-| **Auto-delete (nightly purge)** | Scheduler wipes ALL guest data — sessions, chats, messages — once per day at an admin-configurable local hour (default 00:00, `guest_purge_hour`); plus a manual "Purge guest chats now" button in Admin → Usage Statistics |
+| **Auto-delete (nightly purge)** | Scheduler wipes ALL guest data — sessions, chats, messages — once per day at an admin-configurable local hour picked from a clock-style **HH:00 dropdown** (default 00:00, `guest_purge_hour`); plus a manual "Purge guest chat" button (warn-confirm) in Admin → Usage Statistics |
 
 ### Chat Experience
 
