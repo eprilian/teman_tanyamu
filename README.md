@@ -104,7 +104,7 @@
 Compact dashboard: period as segmented pills (1d/7d/30d/90d, default 1d) beside Purge/Reset action buttons. Card row (requests, total/prompt/completion tokens, active users, guest sessions) + a canvas bar chart (no chart library, re-themes light/dark) whose x-axis shows **hour labels (00:00–21:00) for 1d** and **date labels (dd/mm) for 7/30/90d**. Top-10 model & user rankings sit side by side in a 2-column grid with rank numbers, inline bars and token+request meta per row. Endpoints: `GET /api/admin/stats?days=N` (1–365), `POST /api/admin/guest-purge-now`, `PUT /api/admin/reset-usage`.
 
 ### Reply Stats Strip (v1.0-beta.31)
-- **Open-WebUI-style meta chips** under every finished answer: ⏱ generation time (tooltip shows first-token latency), ⚡ output speed (tokens/s), ◔ context-window usage %, ↓ prompt tokens, ↑ completion tokens, ∑ total — each chip has an ID/EN tooltip.
+- **Open-WebUI-style meta chips** under every finished answer: ⏱ generation time (tooltip shows first-token latency), ⚡ output speed (tokens/s), ◔ context-window usage %, ↑ prompt tokens (sent), ↓ completion tokens (received), ∑ total — each chip has an ID/EN tooltip.
 - **Persistent**: stored in `messages.meta` (JSON) → survives refresh/reload, rendered for old replies too, and shown live for temp/guest streams.
 - **Admin → Token Saver** gained a **Model context window** setting (default 8,192 tokens, validated 1,024–1,048,576, error `ERR_BAD_CTXWIN`) used to compute the context-usage %.
 
@@ -633,11 +633,13 @@ Fitur operasional level produksi:
   "aborted is not defined", output invisible until refresh (the server finished & saved anyway).
   Loop now breaks on `done` only; static regression assertion added to the suite (47 total) so
   server-only identifiers in client reader loops can never ship again.
-- **Reply stats strip (v1.0-beta.31)** — Open-WebUI-style meta chips under every finished answer
-  (time, tok/s, context %, prompt/completion/total tokens) with ID/EN tooltips; persisted in the
+- **Reply Stats Strip (v1.0-beta.31-32)** — Open-WebUI-style meta chips under every finished answer
+  (time, tok/s, context %, ↑ prompt / ↓ completion / ∑ total tokens) with ID/EN tooltips; persisted in the
   new `messages.meta` column so they survive refresh; live for temp & guest streams too; admin
   Token Saver gains a validated **Model context window** setting (`ERR_BAD_CTXWIN`). Suite now 50.
-- **Versi konsisten**: `package.json` `1.0.0-beta.31` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+- **Meta chip arrows swapped (v1.0-beta.32)** — ↑ = prompt sent, ↓ = reply received (chat/network
+  convention everyone reads intuitively; the old well-metaphor read backwards to users).
+- **Versi konsisten**: `package.json` `1.0.0-beta.32` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
 
 ## Changelog
 

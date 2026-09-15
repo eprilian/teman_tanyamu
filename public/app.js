@@ -1306,8 +1306,9 @@ function metaChipsHTML(meta) {
   if (ms > 900 && comp > 0) chips.push({ ic: ICON_BOLT, v: (comp / (ms / 1000)).toFixed(1) + ' t/s', tip: t('meta_tip_rate') });
   const ctx = Number(meta.ctx) || 0, prompt = Number(meta.p) || 0;
   if (ctx > 0 && prompt > 0) chips.push({ ic: ICON_CTX, v: Math.round((prompt / ctx) * 100) + '%', tip: t('meta_tip_ctx', fmtTok(prompt), fmtTok(ctx)) });
-  if (prompt > 0) chips.push({ ic: ICON_DOWN, v: fmtTok(prompt), tip: t('meta_tip_prompt') });
-  if (comp > 0) chips.push({ ic: ICON_UP, v: fmtTok(comp), tip: t('meta_tip_completion') });
+  // ↑ = sent (prompt dikirim ke model), ↓ = received (balasan diterima) — chat/network convention, not well metaphor
+  if (prompt > 0) chips.push({ ic: ICON_UP, v: fmtTok(prompt), tip: t('meta_tip_prompt') });
+  if (comp > 0) chips.push({ ic: ICON_DOWN, v: fmtTok(comp), tip: t('meta_tip_completion') });
   const tot = Number(meta.t) || 0;
   if (tot > 0) chips.push({ ic: ICON_TOTAL, v: fmtTok(tot), tip: t('meta_tip_total') });
   if (!chips.length) return '';
