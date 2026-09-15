@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.24';
+const APP_VERSION = '1.0-beta.26';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -78,6 +78,21 @@ try { db.exec('ALTER TABLE chats ADD COLUMN summary TEXT'); } catch (_) {}
 try { db.exec('ALTER TABLE chats ADD COLUMN summary_upto_id INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE usage ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE usage ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+// per-request mode ledger (normal/eco/temp/guest) incl. model — usage table alone can't split modes
+db.exec(`CREATE TABLE IF NOT EXISTS usage_events (
+  date TEXT NOT NULL, hour INTEGER NOT NULL, mode TEXT NOT NULL, model TEXT NOT NULL,
+  reqs INTEGER DEFAULT 0, tok INTEGER DEFAULT 0,
+  PRIMARY KEY (date, hour, mode, model)
+);`)
+try {
+  if (db.prepare('SELECT COUNT(*) c FROM usage_events').get().c === 0) {
+    db.prepare(`INSERT OR IGNORE INTO usage_events
+      SELECT substr(m.created_at,1,10), CAST(strftime('%H', m.created_at, 'localtime') AS INTEGER),
+             CASE WHEN c.lean = 1 THEN 'eco' ELSE 'normal' END, c.model, COUNT(*), COALESCE(SUM(m.tokens),0)
+      FROM messages m JOIN chats c ON c.id = m.chat_id
+      WHERE m.role='assistant' AND c.user_id > 0 GROUP BY 1,2,3,4`).run();
+  }
+} catch (_) {}
 db.exec(`CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
@@ -239,9 +254,18 @@ function checkQuota(user) {
   return { ok: true, used, quota: user.daily_quota };
 }
 
-function countRequest(user, tokens, promptTokens, completionTokens) {
-  if (user.guest) { bumpGuestMsg(user.guest_id); return; }
+function countRequest(user, tokens, promptTokens, completionTokens, mode, model) {
+  if (user.guest) bumpGuestMsg(user.guest_id);
   bumpUsage(user, tokens, promptTokens, completionTokens);
+  bumpEvent(mode || (user.guest ? 'guest' : 'normal'), model, tokens);
+}
+// one row per (day, local hour, mode, model) — cheap aggregate, powers per-mode & per-model stats for ALL modes
+function bumpEvent(mode, model, tokens) {
+  try {
+    db.prepare(`INSERT INTO usage_events (date, hour, mode, model, reqs, tok) VALUES (?, ?, ?, ?, 1, ?)
+      ON CONFLICT(date, hour, mode, model) DO UPDATE SET reqs = reqs + 1, tok = tok + excluded.tok`)
+      .run(today(), new Date().getHours(), mode, String(model || 'unknown').slice(0, 120), tokens || 0);
+  } catch (_) { /* stats must never break a reply */ }
 }
 function bumpUsage(user, tokens, promptTokens, completionTokens) {
   const p = promptTokens || 0, c = completionTokens || 0;
@@ -965,7 +989,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
     if (aiReply) {
       db.prepare('INSERT INTO messages (chat_id, role, content, tokens) VALUES (?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens);
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chat.id);
-      countRequest(req.user, tokens, promptTokens, completionTokens);
+      countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
       // background: refresh rolling summary + cross-chat memory (lean mode = no context, skip both)
       if (provisionalTitle && !req.guest) scheduleTitle(chat, cleanMessage, aiReply, provisionalTitle);
       if (!lean) {
@@ -980,7 +1004,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
   } catch (e) {
     if (aiReply) {
       db.prepare('INSERT INTO messages (chat_id, role, content, tokens) VALUES (?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens);
-      countRequest(req.user, tokens, promptTokens, completionTokens);
+      countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
     }
     const friendly = e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code
       : (e.name === 'TimeoutError' || /timed? ?out/i.test(String(e.message || '')))
@@ -1098,7 +1122,7 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
         } catch (_) {}
       }
     }
-    countRequest(req.user, tokens);
+    countRequest(req.user, tokens, 0, 0, req.guest ? 'guest' : (lean ? 'eco' : 'temp'), effectiveModel);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
@@ -1205,14 +1229,17 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     GROUP BY v.user_id ORDER BY tok DESC LIMIT 10`).all('-' + (days - 1) + ' day');
   // per-model: join messages->chats (only saved chats; temp chat excluded)
   const byModel = db.prepare(`
-    SELECT c.model, COUNT(m.id) msgs, COALESCE(SUM(m.tokens),0) tok
-    FROM messages m JOIN chats c ON c.id = m.chat_id
-    WHERE m.role='assistant' AND c.user_id > 0 AND m.created_at >= datetime('now',?)
-    GROUP BY c.model ORDER BY tok DESC LIMIT 10`).all('-' + (days - 1) + ' day');
+    SELECT model, SUM(reqs) msgs, SUM(tok) tok
+    FROM usage_events WHERE date >= date('now',?)
+    GROUP BY model ORDER BY tok DESC LIMIT 10`).all('-' + (days - 1) + ' day');
   const totals = db.prepare(`
     SELECT COALESCE(SUM(request_count),0) reqs, COALESCE(SUM(tokens_used),0) tok,
       COALESCE(SUM(prompt_tokens),0) p, COALESCE(SUM(completion_tokens),0) c
     FROM usage WHERE date >= date('now',?)`).get('-' + (days - 1) + ' day');
+  // mode ledger: every AI call from every mode lands here (normal/eco/temp/guest)
+  const perMode = db.prepare(`
+    SELECT mode, SUM(reqs) reqs, SUM(tok) tok FROM usage_events
+    WHERE date >= date('now',?) GROUP BY mode`).all('-' + (days - 1) + ' day');
   const activeUsers = db.prepare(`
     SELECT COUNT(DISTINCT user_id) n FROM usage WHERE date >= date('now',?) AND user_id > 0`).get('-' + (days - 1) + ' day');
   const guestSessions = db.prepare(`
@@ -1221,10 +1248,8 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
   if (days === 1) {
     // hourly buckets of TODAY (local time), one assistant message = one request
     const rows = db.prepare(`
-      SELECT strftime('%H', m.created_at, 'localtime') h, COUNT(*) reqs, COALESCE(SUM(m.tokens),0) tok
-      FROM messages m JOIN chats c ON c.id = m.chat_id
-      WHERE m.role='assistant' AND c.user_id > 0 AND date(m.created_at, 'localtime') = date('now', 'localtime')
-      GROUP BY h`).all();
+      SELECT printf('%02d', hour) h, SUM(reqs) reqs, SUM(tok) tok
+      FROM usage_events WHERE date = date('now') GROUP BY hour`).all();
     const byH = {}; rows.forEach(x => { byH[x.h] = x; });
     perHour = [];
     for (let i = 0; i < 24; i++) {
@@ -1232,7 +1257,7 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
       perHour.push({ h: key, reqs: byH[key] ? Number(byH[key].reqs) : 0, tok: byH[key] ? Number(byH[key].tok) : 0 });
     }
   }
-  res.json({ days, per_day: perDay, per_hour: perHour, by_user: byUser, by_model: byModel, totals, active_users: activeUsers.n, guest_sessions: guestSessions.n });
+  res.json({ days, per_day: perDay, per_hour: perHour, by_user: byUser, by_model: byModel, per_mode: perMode, totals, active_users: activeUsers.n, guest_sessions: guestSessions.n });
 });
 
 // ---------- admin: model gateway (Open WebUI style: base URL + API key) ----------
@@ -1387,6 +1412,8 @@ app.put('/api/admin/users/:id/quota', requireAuth, requireAdmin, (req, res) => {
 // reset ALL usage (every user, every date) — admin only
 app.put('/api/admin/reset-usage', requireAuth, requireAdmin, (req, res) => {
   db.prepare('DELETE FROM usage').run();
+  db.prepare('DELETE FROM usage_events').run();
+  audit(req.user, 'usage_reset', null, null);
   res.json({ ok: true });
 });
 
@@ -1555,6 +1582,17 @@ app.post('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
+// ---------- scheduled guest-chat purge (admin-configurable local time, default 00:00) ----------
+app.post('/api/admin/guest-purge-now', requireAuth, requireAdmin, (req, res) => {
+  const n = runGuestPurge(req.user, 'manual');
+  audit(req.user, 'guest_purge_manual', null, 'cleared=' + n);
+  res.json({ ok: true, cleared: n });
+});
+function purgeHour() {
+  const n = Number(getSetting('guest_purge_hour'));
+  return Number.isFinite(n) ? Math.min(23, Math.max(0, Math.round(n))) : 0;
+}
+
 // ---------- SPA fallback: unknown non-API GET -> index.html (client router decides) ----------
 app.use('/api', (req, res) => res.status(404).json({ error: 'ERR_NOT_FOUND' }));
 app.get('/{*splat}', (req, res) => {
@@ -1597,16 +1635,6 @@ function runAutoBackup() {
   } catch (e) { log('error', 'auto_backup_failed', { msg: String(e.message || e) }); }
 }
 
-// ---------- scheduled guest-chat purge (admin-configurable local time, default 00:00) ----------
-app.post('/api/admin/guest-purge-now', requireAuth, requireAdmin, (req, res) => {
-  const n = runGuestPurge(req.user, 'manual');
-  audit(req.user, 'guest_purge_manual', null, 'cleared=' + n);
-  res.json({ ok: true, cleared: n });
-});
-function purgeHour() {
-  const n = Number(getSetting('guest_purge_hour'));
-  return Number.isFinite(n) ? Math.min(23, Math.max(0, Math.round(n))) : 0;
-}
 function runGuestPurge(actor, reason) {
   // wipe ALL guest data: expired or not — this is the scheduled cleanup
   const ids = db.prepare('SELECT DISTINCT guest_id FROM guest_sessions').all();

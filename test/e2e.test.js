@@ -69,6 +69,7 @@ async function runSuite() {
   ok('SPA fallback 200', spa.status === 200 && (await spa.text()).includes('id="app"') || spa.status === 200);
   const nf = await j('/api/nope-does-not-exist');
   ok('API 404 JSON', nf.status === 404 && nf.body.error === 'ERR_NOT_FOUND');
+  ok('admin-only purge not for guests', (await j('/api/admin/guest-purge-now', { method: 'POST' })).status === 401);
 
   // ---------- create suite users via DB (no admin creds needed) ----------
   line('setup (DB users)');
@@ -159,6 +160,12 @@ async function runSuite() {
   ok('metrics prometheus', metrics.status === 200 && typeof metrics.body === 'string' && metrics.body.includes('dashaim_requests_24h'));
   const backup = await j('/api/admin/backup', { method: 'POST' }, ckA);
   ok('admin backup', backup.status === 200 && backup.body.ok === true && /^chat-.*\.db$/.test(backup.body.file || ''));
+  // regression: purge route must be registered BEFORE the /api 404 guard (v24 bug: 404 ERR_NOT_FOUND)
+  let purgeNow = await j('/api/admin/guest-purge-now', { method: 'POST' }, ckA);
+  if (purgeNow.status >= 500) { await new Promise((r2) => setTimeout(r2, 1200)); purgeNow = await j('/api/admin/guest-purge-now', { method: 'POST' }, ckA); } // boot auto-backup race
+  ok('guest purge-now routed', purgeNow.status === 200 && purgeNow.body.ok === true, 'st=' + purgeNow.status + ' ' + JSON.stringify(purgeNow.body).slice(0, 80));
+  const statsMode = await j('/api/admin/stats?days=30', {}, ckA);
+  ok('stats exposes per_mode', Array.isArray(statsMode.body.per_mode), JSON.stringify(statsMode.body.per_mode || null).slice(0, 80));
 
   // settings round-trip: set purge hour to its current value (no-op write)
   const cur = await j('/api/admin/settings', {}, ckA);

@@ -205,9 +205,13 @@ const ICON_X = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stro
 function toast(msg, type = '', ms = 4000) {
   const t = $('#toast');
   if (!t) return;
-  const main = document.querySelector('.main');
-  if (main) {
-    const rc = main.getBoundingClientRect();
+  // anchor: a centered dialog when one is open, otherwise the chat main area.
+  // (centering on .main while the admin modal is up looks off-center, because
+  //  .main shifts with the sidebar; the dialog is always viewport-centered)
+  const dlg = document.querySelector('.modal-backdrop.active .modal');
+  const ref = dlg || document.querySelector('.main');
+  if (ref) {
+    const rc = ref.getBoundingClientRect();
     t.style.left = Math.round(rc.left + rc.width / 2) + 'px';
   }
   t.textContent = msg;
@@ -2157,18 +2161,23 @@ $('#stat-purge-now').addEventListener('click', () => {
   });
 });
 function fmtK(n) { n = Number(n) || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'k' : String(n); }
+let statsSig = '';
 function renderAdminStats() {
   const cards = $('#stat-cards'), charts = $('#stat-chart'), models = $('#stat-models'), users = $('#stat-users');
   if (!cards || !charts || !statCache) return;
   const tt = statCache.totals || {};
+  // admin poll every 5 s: skip re-render when the numbers are identical (no flicker / no replayed cascade anim)
+  const sig = JSON.stringify(statCache) + (document.body.classList.contains('light') ? 'L' : 'D');
+  if (sig === statsSig) return;
+  statsSig = sig;
   cards.innerHTML = [
-    [t('stat_reqs'), fmtK(tt.reqs)],
-    [t('stat_tok'), fmtK(tt.tok)],
-    [t('stat_prompt'), fmtK(tt.p)],
-    [t('stat_completion'), fmtK(tt.c)],
-    [t('stat_active_users'), statCache.active_users],
-    [t('stat_guest_sessions'), statCache.guest_sessions],
-  ].map(([k, v]) => `<div class="stat-card"><span class="sv">${esc(String(v))}</span><span class="sk">${esc(k)}</span></div>`).join('');
+    [t('stat_reqs'), fmtK(tt.reqs), t('stat_card_hint_reqs'), 'violet'],
+    [t('stat_tok'), fmtK(tt.tok), t('stat_card_hint_tok'), 'blue'],
+    [t('stat_prompt'), fmtK(tt.p), t('stat_card_hint_prompt'), 'amber'],
+    [t('stat_completion'), fmtK(tt.c), t('stat_card_hint_completion'), 'green'],
+    [t('stat_active_users'), statCache.active_users, t('stat_card_hint_users'), 'cyan'],
+    [t('stat_guest_sessions'), statCache.guest_sessions, t('stat_card_hint_guests'), 'pink'],
+  ].map(([k, v, hint, color]) => `<div class="stat-card c-${color}" title="${esc(hint)}"><span class="sv">${esc(String(v))}</span><span class="sk">${esc(k)}</span><span class="sh">${esc(hint)}</span></div>`).join('');
   renderStatChart();
   const barList = (rows, nameKey, label, colorCls, extra) => {
     const mx = rows.reduce((a, m) => Math.max(a, m.tok || 0), 1);
@@ -2182,8 +2191,23 @@ function renderAdminStats() {
         <span class="sb-val">${fmtK(m.tok)}<em>${esc(extra(m))}</em></span>
       </div>`).join('') + '</div>';
   };
-  models.innerHTML = barList(statCache.by_model || [], 'model', t('stat_by_model'), '', m => `${m.msgs || 0} msg`);
+  models.innerHTML = barList(statCache.by_model || [], 'model', t('stat_by_model'), 'm', m => `${m.msgs || 0} req`);
+  renderModeStats();
   users.innerHTML = barList(statCache.by_user || [], 'username', t('stat_by_user'), 'u', u => `${u.reqs} req`);
+}
+function renderModeStats() {
+  const el = $('#stat-modes');
+  if (!el) return;
+  const modes = statCache.per_mode || [];
+  if (!modes.length) { el.innerHTML = ''; return; }
+  const order = { normal: 0, eco: 1, temp: 2, guest: 3 };
+  const sorted = [...modes].sort((a, b) => (order[a.mode] ?? 9) - (order[b.mode] ?? 9));
+  const totReqs = (statCache.totals || {}).reqs || 0;
+  const rows = sorted.map(m => {
+    const pct = totReqs ? Math.round((m.reqs / totReqs) * 100) : 0;
+    return `<div class="mode-row"><span class="mode-ic" data-m="${esc(m.mode)}" title="${esc(m.mode)}"></span><span class="mode-name">${esc(t('mode_' + m.mode) || m.mode)}</span><span class="mode-val">${fmtK(m.reqs)} req · ${fmtK(m.tok)} tok</span><span class="mode-bar"><i data-m="${esc(m.mode)}" style="width:${pct}%"></i></span></div>`;
+  }).join('');
+  el.innerHTML = `<div class="stat-list-head"><span class="stat-list-title">${esc(t('stat_by_mode'))}</span><span class="stat-list-meta">${modes.length}</span></div><div class="mode-rows">${rows}</div><p class="stat-list-note">${esc(t('stat_mode_note'))}</p>`;
 }
 function renderStatChart() {
   const cv = $('#stat-chart');

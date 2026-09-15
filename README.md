@@ -580,7 +580,7 @@ Fitur operasional level produksi:
 - **Throttle generasi**: default 30 panggilan AI / 90 detik per user (tamu: per IP) → `ERR_GEN_LIMITED`; pembuatan sesi tamu 12/menit/IP. **Bisa disetel live** di Admin → Token Saver: "Anti-spam: maks panggilan AI" (5–1000) + "…per rentang detik" (10–600), tersimpan di settings, langsung berlaku tanpa restart, tercatat di audit trail.
 - **Log terstruktur JSON** (`lib/logger.js`) + request log API + endpoint `/api/admin/metrics` (Prometheus text, admin-only).
 - **Purge-day persisten**: guard hari purge sekarang disimpan di `settings` (`guest_last_purge_day`), aman restart, pakai tanggal lokal.
-- **Regression suite permanen**: `test/e2e.test.js` — 43 assertion (auth, isolasi chat, share+XSS+i18n, guard admin, limiter unit, metrics, backup). Jalankan: `./manage.sh test` atau `npm test`.
+- **Regression suite permanen**: `test/e2e.test.js` — 46 assertion (auth, isolasi chat, share+XSS+i18n, guard admin, limiter unit, metrics, backup, purge-route, mode ledger). Jalankan: `./manage.sh test` atau `npm test`.
 - **i18n bersama**: `public/i18n.js` dipakai browser DAN server (halaman share ikut bahasa `Accept-Language`).
 - **Throttle configurable (v1.0-beta.22)** — Admin → Token Saver: "Max calls" + "per seconds"
   side-by-side with an inline explainer note (5–1000 / 10–600); stored in settings, applied live
@@ -598,7 +598,21 @@ Fitur operasional level produksi:
   streamed & saved, you now get a soft "⚠ interrupted" note instead of the answer being replaced
   by an error; SSE heartbeat every 10 s prevents idle connection drops; server always emits
   `[DONE]` so the client never hangs.
-- **Versi konsisten**: `package.json` `1.0.0-beta.23` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+- **Ledger mode statistik (v1.0-beta.25)** — tabel baru `usage_events` mencatat SETIAP panggilan AI
+  per (hari, jam, mode, model) — mode normal/eco/temp/guest kini TERHITUNG SEMUA di kartu, chart
+  per-jam, per-model, dan blok baru "Requests by mode" (bar berwarna + keterangan cara catat;
+  historis normal+eco di-seed otomatis dari messages lama). Verified end-to-end: normal ✓ eco ✓
+  temp ✓ guest ✓. `Reset usage stats` sekarang menyapu kedua ledger (tidak ada ghost chart lagi).
+- **Purge guest chat fixed (v1.0-beta.25)** — tombol "Purge guest chat" selalu "failed": rute
+  `/api/admin/guest-purge-now` ternyata terdaftar SETELAH guard 404 SPA-fallback (regresi senyap
+  dari v17) → 404 ERR_NOT_FOUND. Blok dipindah sebelum guard; 2 assertion regresi baru ditambahkan
+  ke suite agar bug kelas "route after the 404 wall" tidak pernah balik lagi.
+- **Toast anchor aware (v1.0-beta.25)** — popup (purge, save settings, dsb.) kini dipusat ke dialog
+  yang sedang terbuka kalau ada (sebelumnya selalu ke `.main`, jadi terlihat mepet kiri saat panel
+  Admin aktif + sidebar maximize/minimize). Terukur off-center **0px** di kedua posisi sidebar.
+- **Poll admin anti-flicker (v1.0-beta.26)** — re-render statistik tiap 5 s dilewati kalau angkanya
+  sama (signature JSON + tema aktif), cascade animasi tidak replay terus-menerus.
+- **Versi konsisten**: `package.json` `1.0.0-beta.26` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
 
 ## Changelog
 
