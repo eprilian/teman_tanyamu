@@ -69,6 +69,9 @@ async function runSuite() {
   ok('SPA fallback 200', spa.status === 200 && (await spa.text()).includes('id="app"') || spa.status === 200);
   const nf = await j('/api/nope-does-not-exist');
   ok('API 404 JSON', nf.status === 404 && nf.body.error === 'ERR_NOT_FOUND');
+  // regression (v29): server-only identifiers must never leak into the client stream loops
+  const clientJs = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  ok('client free of server-only vars', !/if\s*\(\s*done\s*\|\|\s*aborted\s*\)/.test(clientJs));
   ok('admin-only purge not for guests', (await j('/api/admin/guest-purge-now', { method: 'POST' })).status === 401);
 
   // ---------- create suite users via DB (no admin creds needed) ----------

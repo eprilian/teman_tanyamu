@@ -1612,7 +1612,7 @@ async function send() {
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done || aborted) break;
+      if (done) break; // 'aborted' lives SERVER-side; referencing it here threw ReferenceError on the first chunk (v29 regression: every chat stream died instantly)
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();

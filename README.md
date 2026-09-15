@@ -623,7 +623,12 @@ Fitur operasional level produksi:
   keeps its subtle `:focus-within` highlight only. Measured: border 0px, shadow none, while typing.
 - **"Idle timeout" labels** — Timeout setting renamed (EN/ID) so admins understand it no longer
   limits total answer length/time, only silent-stall detection.
-- **Versi konsisten**: `package.json` `1.0.0-beta.29` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+- **HOTFIX fatal (v1.0-beta.30)** — v29 left a ReferenceError in the client stream loop (`aborted`,
+  a SERVER-side variable, leaked into `send()`): every AI chat died on the first chunk with
+  "aborted is not defined", output invisible until refresh (the server finished & saved anyway).
+  Loop now breaks on `done` only; static regression assertion added to the suite (47 total) so
+  server-only identifiers in client reader loops can never ship again.
+- **Versi konsisten**: `package.json` `1.0.0-beta.30` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
 
 ## Changelog
 
