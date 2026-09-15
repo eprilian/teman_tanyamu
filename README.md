@@ -106,7 +106,10 @@ Compact dashboard: period as segmented pills (1d/7d/30d/90d, default 1d) beside 
 ### Reply Stats Strip (v1.0-beta.31)
 - **Open-WebUI-style meta chips** under every finished answer: ⏱ generation time (tooltip shows first-token latency), ⚡ output speed (tokens/s), ◔ context-window usage %, ↑ prompt tokens (sent), ↓ completion tokens (received), ∑ total — each chip has an ID/EN tooltip.
 - **Persistent**: stored in `messages.meta` (JSON) → survives refresh/reload, rendered for old replies too, and shown live for temp/guest streams.
-- **Admin → Token Saver** gained a **Model context window** setting (default 8,192 tokens, validated 1,024–1,048,576, error `ERR_BAD_CTXWIN`) used to compute the context-usage %.
+- **Context window is AUTO-DETECTED per model** (v1.0-beta.33): the gateway's `/v1/models` metadata
+  (`context_length`, `max_completion_tokens`) feeds the % chip — switch models and the % follows each
+  model's real window. The admin **Fallback context window** setting (validated 1,024-1,048,576,
+  `ERR_BAD_CTXWIN`) is only used for models with no provider metadata (e.g. combo routes).
 
 ### Models
 
@@ -639,7 +642,14 @@ Fitur operasional level produksi:
   Token Saver gains a validated **Model context window** setting (`ERR_BAD_CTXWIN`). Suite now 50.
 - **Meta chip arrows swapped (v1.0-beta.32)** — ↑ = prompt sent, ↓ = reply received (chat/network
   convention everyone reads intuitively; the old well-metaphor read backwards to users).
-- **Versi konsisten**: `package.json` `1.0.0-beta.32` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+- **Context window AUTO-DETECT per model (v1.0-beta.33)** — gateway `/v1/models` metadata
+  (`context_length`, `max_completion_tokens`) is cached with the model list (plus an 8s-after-boot
+  warm fetch) and feeds the ◔ chip live: each reply's % uses the window of the model that generated
+  it (gemini-3.5-flash → 1.049k → 6.2k prompt = 1%, not the scary 50% of the old fixed 8k).
+  Models without metadata (e.g. `auto-change` combo) fall back to the admin setting, now honestly
+  labelled **Fallback context window**; tooltip also shows the model's max output. Verified
+  end-to-end on both paths; temp/guest streams included.
+- **Versi konsisten**: `package.json` `1.0.0-beta.33` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
 
 ## Changelog
 

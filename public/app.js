@@ -1305,7 +1305,7 @@ function metaChipsHTML(meta) {
   if (ms > 0) chips.push({ ic: ICON_CLOCK, v: ms < 10000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms / 1000) + 's', tip: tt ? t('meta_tip_time', (ms / 1000).toFixed(1), (tt / 1000).toFixed(1)) : t('meta_gen') });
   if (ms > 900 && comp > 0) chips.push({ ic: ICON_BOLT, v: (comp / (ms / 1000)).toFixed(1) + ' t/s', tip: t('meta_tip_rate') });
   const ctx = Number(meta.ctx) || 0, prompt = Number(meta.p) || 0;
-  if (ctx > 0 && prompt > 0) chips.push({ ic: ICON_CTX, v: Math.round((prompt / ctx) * 100) + '%', tip: t('meta_tip_ctx', fmtTok(prompt), fmtTok(ctx)) });
+  if (ctx > 0 && prompt > 0) chips.push({ ic: ICON_CTX, v: Math.round((prompt / ctx) * 100) + '%', tip: Number(meta.out) > 0 ? t('meta_tip_ctx_out', fmtTok(prompt), fmtTok(ctx), fmtTok(meta.out)) : t('meta_tip_ctx', fmtTok(prompt), fmtTok(ctx)) });
   // ↑ = sent (prompt dikirim ke model), ↓ = received (balasan diterima) — chat/network convention, not well metaphor
   if (prompt > 0) chips.push({ ic: ICON_UP, v: fmtTok(prompt), tip: t('meta_tip_prompt') });
   if (comp > 0) chips.push({ ic: ICON_DOWN, v: fmtTok(comp), tip: t('meta_tip_completion') });

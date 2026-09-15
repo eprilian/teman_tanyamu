@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.32';
+const APP_VERSION = '1.0-beta.33';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -856,8 +856,31 @@ app.delete('/api/chats/:id/messages/:msgId', requireAuth, (req, res) => {
 
 // ---------- models ----------
 // model list cache: gateway /models is slow (2-6 s) and boot-blocking; cache 60 s, serve stale on failure
-let modelsCache = { at: 0, base: '', key: '', ids: null };
-function invalidateModelsCache() { modelsCache.ids = null; }
+let modelsCache = { at: 0, base: '', key: '', ids: null, meta: null };
+function invalidateModelsCache() { modelsCache.ids = null; modelsCache.meta = null; }
+// warm the model+context map once per boot so chat streams resolve window sizes without waiting on first /api/models
+async function warmModelsCache() {
+  try {
+    if (!routerConfigured()) return;
+    const r = await routerFetch('/models', { signal: AbortSignal.timeout(20000) });
+    const data = await r.json();
+    if (!Array.isArray(data.data)) return;
+    const ids = data.data.map((m) => m.id);
+    const meta = {};
+    for (const m of data.data) {
+      const c = m.context_length || (m.capabilities && m.capabilities.contextWindow) || 0;
+      const o = m.max_completion_tokens || (m.capabilities && m.capabilities.maxOutput) || 0;
+      if (c || o) meta[m.id] = { ctx: c || 0, out: o || 0 };
+    }
+    modelsCache = { at: Date.now(), base: getRouterBase(), key: getRouterKey(), ids, meta };
+  } catch (_) { /* cold start without gateway is fine: chips fall back to the admin setting */ }
+}
+// gateway /models carries per-model context_length & max_completion_tokens for most providers —
+// map of id -> {ctx, out}. Admin's context_window setting is only the FALLBACK for models missing here.
+function ctxForModel(id) {
+  const m = modelsCache.meta && modelsCache.meta[id];
+  return { ctx: (m && m.ctx) || 0, out: (m && m.out) || 0 };
+}
 app.get('/api/models', requireAuth, async (req, res) => {
   if (!routerConfigured()) return res.status(503).json({ error: 'ERR_ROUTER_NOT_CONFIGURED' });
   const base = getRouterBase(), key = getRouterKey();
@@ -868,7 +891,13 @@ app.get('/api/models', requireAuth, async (req, res) => {
     const r = await routerFetch('/models', { signal: AbortSignal.timeout(15000) });
     const data = await r.json();
     const ids = data.data.map(m => m.id);
-    modelsCache = { at: Date.now(), base, key, ids };
+    const meta = {};
+    for (const m of data.data) {
+      const c = m.context_length || (m.capabilities && m.capabilities.contextWindow) || 0;
+      const o = m.max_completion_tokens || (m.capabilities && m.capabilities.maxOutput) || 0;
+      if (c || o) meta[m.id] = { ctx: c || 0, out: o || 0 };
+    }
+    modelsCache = { at: Date.now(), base, key, ids, meta };
     res.json(ids);
   } catch (e) {
     if (modelsCache.ids) { // gateway down/slow: last known good list beats an error toast
@@ -918,7 +947,8 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
 
   // --- token-saving context builder ---
   const HISTORY_BUDGET = getSettingInt('history_token_budget', 1600); // ~window lama, tapi berdasarkan token
-  const CONTEXT_WINDOW = getSettingInt('context_window', 8192); // jendela konteks model utk chip pemakaian
+  const MODEL_INFO = ctxForModel(chat.model); // from gateway metadata when known
+  const CONTEXT_WINDOW = MODEL_INFO.ctx || getSettingInt('context_window', 8192); // manual setting = fallback
   const MAX_REPLY_TOKENS = getSettingInt('max_reply_tokens', 4096);  // cap output
   const lean = !!chat.lean;
   const history = lean ? [] : buildHistory(chat.id, chat.summary_upto_id || 0, HISTORY_BUDGET);
@@ -1005,7 +1035,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
     }
 
     if (aiReply) {
-      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW }));
+      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out }));
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chat.id);
       countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
       // background: refresh rolling summary + cross-chat memory (lean mode = no context, skip both)
@@ -1018,13 +1048,13 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
     }
     idle.done();
     if (truncated && aiReply) res.write(`data: ${JSON.stringify({ note: 'ERR_LENGTH' })}\n\n`);
-    res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out } })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
     idle.done();
     if (aiReply) {
-      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW }));
+      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out }));
       countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
     }
     const friendly = e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code
@@ -1087,7 +1117,8 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
 
   let tokens = 0; let promptTokens = 0; let completionTokens = 0;
   const t0 = Date.now(); let tFirst = 0;
-  const CONTEXT_WINDOW = getSettingInt('context_window', 8192);
+  const MODEL_INFO = ctxForModel(effectiveModel);
+  const CONTEXT_WINDOW = MODEL_INFO.ctx || getSettingInt('context_window', 8192);
   let aiTempReply = '';
   let aborted = false;
   res.on('close', () => { if (!res.writableEnded) aborted = true; });
@@ -1150,7 +1181,7 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
     }
     idle.done();
     countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'temp'), effectiveModel);
-    res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out } })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
@@ -1638,6 +1669,7 @@ app.listen(PORT, () => {
   logInfo('server_start', { port: PORT, version: APP_VERSION });
   setTimeout(runAutoBackup, 3000).unref();   // one backup per boot, then daily
   setInterval(runAutoBackup, 24 * 3600 * 1000).unref();
+  setTimeout(warmModelsCache, 8000).unref(); // context-window map for reply stats chips (staggered after backup)
 });
 
 // ---------- #1 automatic backups (30 days retention, safe: better-sqlite3 online backup) ----------
