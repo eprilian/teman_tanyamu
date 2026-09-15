@@ -35,6 +35,30 @@ async function j(pathname, opts = {}, cookie) {
 async function login(u, p) { return (await j('/api/login', { method: 'POST', body: JSON.stringify({ username: u, password: p }) })).cookie; }
 
 async function main() {
+  try {
+    return await runSuite();
+  } finally {
+    // crash-proof cleanup: suite users + their data always removed, even mid-failure
+    try {
+      const D = require('better-sqlite3');
+      const db = new Database(path.join(ROOT, 'chat.db'));
+      for (const u of USERS) {
+        const row = db.prepare('SELECT id FROM users WHERE username = ?').get(u);
+        if (row) {
+          db.prepare('DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE user_id = ?)').run(row.id);
+          db.prepare('DELETE FROM shared_chats WHERE user_id = ?').run(row.id);
+          db.prepare('DELETE FROM chats WHERE user_id = ?').run(row.id);
+          db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.id);
+          db.prepare('DELETE FROM usage WHERE user_id = ?').run(row.id);
+          db.prepare('DELETE FROM users WHERE id = ?').run(row.id);
+        }
+      }
+      db.close();
+    } catch (e) { console.warn('post-suite cleanup:', e.message); }
+  }
+}
+
+async function runSuite() {
   // health
   line('health & version');
   const h = await j('/api/health');
@@ -173,26 +197,14 @@ async function main() {
     ok('xss escaped in share', !page.includes('<script>') && !page.includes('<img'));
   } else ok('xss share ok?', false, String(xssShare.status));
 
-  // ---------- cleanup ----------
+  // ---------- cleanup (idempotent; the finally in main() re-runs it as a safety net) ----------
   line('cleanup');
-  for (const u of USERS) {
-    const row = db.prepare('SELECT id FROM users WHERE username = ?').get(u);
-    if (row) {
-      db.prepare('DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE user_id = ?)').run(row.id);
-      db.prepare('DELETE FROM shared_chats WHERE user_id = ?').run(row.id);
-      db.prepare('DELETE FROM chats WHERE user_id = ?').run(row.id);
-      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.id);
-      db.prepare('DELETE FROM usage WHERE user_id = ?').run(row.id);
-      db.prepare('DELETE FROM users WHERE id = ?').run(row.id);
-    }
-  }
   db.close();
   ok('cleanup done', true);
 
   console.log('\n========================================');
   console.log(`RESULT: ${pass} passed, ${fail} failed`);
-  if (fails.length) { console.log('Failures:\n - ' + fails.join('\n - ')); process.exit(1); }
-  process.exit(0);
+  return fail > 0 ? 1 : 0;
 }
 
-main().catch((e) => { console.error('SUITE CRASH:', e); process.exit(1); });
+main().then((code) => process.exit(code)).catch((e) => { console.error('SUITE CRASH:', e); process.exit(1); });

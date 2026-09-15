@@ -582,10 +582,13 @@ Fitur operasional level produksi:
 - **Purge-day persisten**: guard hari purge sekarang disimpan di `settings` (`guest_last_purge_day`), aman restart, pakai tanggal lokal.
 - **Regression suite permanen**: `test/e2e.test.js` — 43 assertion (auth, isolasi chat, share+XSS+i18n, guard admin, limiter unit, metrics, backup). Jalankan: `./manage.sh test` atau `npm test`.
 - **i18n bersama**: `public/i18n.js` dipakai browser DAN server (halaman share ikut bahasa `Accept-Language`).
-- **Throttle configurable (v1.0-beta.22)** — Admin → Token Saver gains "Anti-spam: max AI calls"
-  (5–1000) + "…per window (seconds)" (10–600); stored in settings, applied live without restart,
-  audit-tracked.
-- **Versi konsisten**: `package.json` `1.0.0-beta.22` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+- **Throttle configurable (v1.0-beta.22)** — Admin → Token Saver: "Max calls" + "per seconds"
+  side-by-side with an inline explainer note (5–1000 / 10–600); stored in settings, applied live
+  without restart, audit-tracked.
+- **Motion layer (v1.0-beta.23)** — chat bubbles rise-in, history & audit rows stagger, stat cards
+  cascade, send button pulses while streaming, login card entrance, focus glow rings, theme
+  cross-fade, button press feedback — all honoring `prefers-reduced-motion`.
+- **Versi konsisten**: `package.json` `1.0.0-beta.23` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
 
 ## Changelog
 

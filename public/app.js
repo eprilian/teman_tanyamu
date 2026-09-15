@@ -135,6 +135,7 @@ function applyI18N() {
     setT('label[for="set-guest-minutes"]', t('guest_minutes_lbl'));
     setT('label[for="set-gen-max"]', t('gen_max_lbl'));
     setT('label[for="set-gen-window"]', t('gen_window_lbl'));
+    setT('#lbl-gen-note', t('gen_note_lbl'));
     setT('#guest-btn-label', t('guest_btn'));
     setT('#guest-save', t('router_save_btn'));
     setT('#token-reset', t('reset_btn'));

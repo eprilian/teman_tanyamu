@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teman Tanyamu</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="stylesheet" href="/style.css?v=1.0-beta.22">
+<link rel="stylesheet" href="/style.css?v=1.0-beta.23">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hljs-css">
 <script src="/vendor/highlight.min.js" defer></script>
 </head>
@@ -250,15 +250,18 @@
         <label for="set-timeout" id="lbl-timeout">Timeout (seconds)</label>
         <input id="set-timeout" type="number" value="120" min="30" max="600" step="10">
       </div>
-      <div>
-        <label for="set-gen-max" id="lbl-gen-max">Anti-spam: max AI calls</label>
-        <input id="set-gen-max" type="number" value="30" min="5" max="1000" step="1">
-      </div>
-      <div>
-        <label for="set-gen-window" id="lbl-gen-window">…per window (seconds)</label>
-        <input id="set-gen-window" type="number" value="90" min="10" max="600" step="10">
+      <div class="gen-pair">
+        <div>
+          <label for="set-gen-max" id="lbl-gen-max">Max calls</label>
+          <input id="set-gen-max" type="number" value="30" min="5" max="1000" step="1">
+        </div>
+        <div>
+          <label for="set-gen-window" id="lbl-gen-window">per seconds</label>
+          <input id="set-gen-window" type="number" value="90" min="10" max="600" step="10">
+        </div>
       </div>
     </div>
+    <p class="gen-note" id="lbl-gen-note">Anti-spam: how many AI calls one user may send within the time window.</p>
     <div style="display:flex; gap:8px; margin-top:10px;">
       <button class="btn-primary" id="token-save" style="flex:1; padding:9px 15px; border-radius:9px; font-size:13px; font-weight:500;">Save</button>
       <button class="btn-ghost" id="token-reset" style="padding:9px 15px; border-radius:9px; font-size:13px;">Reset</button>
@@ -430,7 +433,7 @@
 
 <div id="toast" role="status"></div>
 
-<script src="/i18n.js?v=1.0-beta.22"></script>
-<script src="/app.js?v=1.0-beta.22"></script>
+<script src="/i18n.js?v=1.0-beta.23"></script>
+<script src="/app.js?v=1.0-beta.23"></script>
 </body>
 </html>
