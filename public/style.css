@@ -889,8 +889,11 @@ button:active { transform: scale(.96); }
 /* login card entrance */
 .login-card { animation: riseIn 320ms cubic-bezier(.16,1,.3,1) both; }
 
-/* input focus glow: soft accent ring in both themes */
+/* input focus glow: soft accent ring in both themes.
+   the chat textarea is exempt: #input-msg is borderless BY DESIGN and the composer
+   already highlights itself via .composer:focus-within — a glow here drew a ring around it */
 input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); outline: none; }
+#input-msg:focus { border: none; box-shadow: none; }
 
 /* theme switch: cross-fade surfaces instead of hard flash */
 body { transition: background-color 180ms ease, color 180ms ease; }

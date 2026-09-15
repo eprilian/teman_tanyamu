@@ -612,7 +612,18 @@ Fitur operasional level produksi:
   Admin aktif + sidebar maximize/minimize). Terukur off-center **0px** di kedua posisi sidebar.
 - **Poll admin anti-flicker (v1.0-beta.26)** — re-render statistik tiap 5 s dilewati kalau angkanya
   sama (signature JSON + tema aktif), cascade animasi tidak replay terus-menerus.
-- **Versi konsisten**: `package.json` `1.0.0-beta.26` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+- **Long answers fixed (v1.0-beta.27–.29)** — "jawaban terpotong lalu berhenti" caused by two silent
+  killers: total 120 s hard timeout (killed healthy long streams) and the 1024-token reply cap.
+  Timeout is now an *idle* watchdog (bytes flowing = alive; only dead connections abort), max-reply
+  default raised to 4096 (slider up to 16384, live-apply), and a reply that still hits the cap shows
+  a soft hint "⚠ …max reply…" instead of dying quietly. Verified end-to-end: the user's exact
+  question "sejarah indonesia abad 15 - hari ini" streams 3 718 chars / 3 346 completion tokens, clean [DONE].
+- **Composer border regression (v1.0-beta.27)** — the v23 global focus-glow leaked into the chat
+  textarea and drew a ring around it; `#input-msg:focus` is explicitly borderless again, the composer
+  keeps its subtle `:focus-within` highlight only. Measured: border 0px, shadow none, while typing.
+- **"Idle timeout" labels** — Timeout setting renamed (EN/ID) so admins understand it no longer
+  limits total answer length/time, only silent-stall detection.
+- **Versi konsisten**: `package.json` `1.0.0-beta.29` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
 
 ## Changelog
 

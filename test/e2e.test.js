@@ -173,15 +173,17 @@ async function runSuite() {
   ok('settings PUT ok', setRes.status === 200);
   const badHour = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ guest_purge_hour: 99 }) }, ckA);
   ok('settings bad purge hour rejected', badHour.status === 400 && badHour.body.error === 'ERR_BAD_PURGE_HOUR');
-  // generation throttle is admin-configurable (#5)
+  // generation throttle is admin-configurable (#5). NOTE: the admin may have set custom
+  // limits (e.g. 15/60) — don't assume defaults; snapshot, test, restore exactly what was there.
   const gp = await j('/api/admin/settings', {}, ckA);
-  ok('settings expose gen limit', gp.status === 200 && gp.body.gen_limit_max === 30 && gp.body.gen_limit_window_sec === 90, JSON.stringify({ m: gp.body.gen_limit_max, w: gp.body.gen_limit_window_sec }));
+  const origG = { max: gp.body.gen_limit_max, win: gp.body.gen_limit_window_sec };
+  ok('settings expose gen limit', gp.status === 200 && typeof origG.max === 'number' && origG.max >= 5 && origG.max <= 1000 && typeof origG.win === 'number' && origG.win >= 10 && origG.win <= 600, JSON.stringify(origG));
   const setG = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ gen_limit_max: 12, gen_limit_window_sec: 30 }) }, ckA);
   ok('gen limit set to 12/30', setG.status === 200 && setG.body.gen_limit_max === 12 && setG.body.gen_limit_window_sec === 30);
   const badG = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ gen_limit_max: 2 }) }, ckA);
   ok('gen limit bounds rejected', badG.status === 400 && badG.body.error === 'ERR_BAD_GEN_LIMIT');
-  const backG = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ gen_limit_max: 30, gen_limit_window_sec: 90 }) }, ckA);
-  ok('gen limit restored 30/90', backG.status === 200 && backG.body.gen_limit_max === 30);
+  const backG = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ gen_limit_max: origG.max, gen_limit_window_sec: origG.win }) }, ckA);
+  ok('gen limit restored to admin value', backG.status === 200 && backG.body.gen_limit_max === origG.max && backG.body.gen_limit_window_sec === origG.win, JSON.stringify({ want: origG, got: { m: backG.body.gen_limit_max, w: backG.body.gen_limit_window_sec } }));
 
   // ---------- guest ----------
   line('guest');

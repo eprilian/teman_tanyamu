@@ -1287,6 +1287,7 @@ async function openChat(id) {
 }
 
 let lastRendered = [];
+let pendingNote = null; // {why, until} — stream note (e.g. ERR_LENGTH) must survive route re-render AND the silent refresh that races it
 function renderMessages(messages, quiet) {
   lastRendered = messages || [];
   const box = $('#messages');
@@ -1298,6 +1299,12 @@ function renderMessages(messages, quiet) {
   });
   box.innerHTML = `<div class="msg-col${quiet ? ' no-anim' : ''}">${parts.join('')}</div>`;
   box.scrollTop = box.scrollHeight;
+  if (pendingNote && lastRendered.length && lastRendered[lastRendered.length - 1].role === 'assistant') {
+    if (Date.now() < pendingNote.until) {
+      const b = box.querySelector('.msg-col > .msg-block:last-child .m-content');
+      if (b) noteStreamInterrupt(b, pendingNote.why); // idempotent: won't stack
+    } else pendingNote = null;
+  } else if (pendingNote && Date.now() >= pendingNote.until) pendingNote = null;
 }
 
 const DEFAULT_USER_AVATAR = '/img/default-avatar.png';
@@ -1601,10 +1608,11 @@ async function send() {
     let interruptNote = null;
     let buffer = '';
     const bubble = getStreamBubble(box);
+    pendingNote = null;
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done || aborted) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -1614,6 +1622,7 @@ async function send() {
           const chunk = JSON.parse(line.slice(6));
           if (chunk.error) throw new Error(chunk.error);
           if (chunk.partial) { interruptNote = chunk.partial; noteStreamInterrupt(bubble, chunk.partial); continue; } // reply saved & visible: soft note only
+          if (chunk.note === 'ERR_LENGTH') { const n = { why: 'ERR_LENGTH', until: Date.now() + 15000 }; pendingNote = n; interruptNote = 'ERR_LENGTH'; noteStreamInterrupt(bubble, 'ERR_LENGTH'); continue; } // cap hit: note survives route re-render + racing silent refresh
           if (chunk.usage) { lastUsage = chunk.usage; continue; }
           if (chunk.content) {
             aiText += chunk.content;
@@ -1652,10 +1661,19 @@ async function send() {
     const cid = currentChatId;
     // server-truth refresh happens OFF the critical path: bubbles already show the answer;
     // message ids (edit/truncate actions) are patched in silently when it arrives.
-    fetch(`/api/chats/${cid}`).then((r) => (r.ok ? r.json() : null)).then((chat) => {
+    const pull = () => fetch(`/api/chats/${cid}`).then((r) => (r.ok ? r.json() : null));
+    const paint = (chat) => {
       if (chat && chat.messages && chat.messages.length && currentChatId === cid && !streaming) {
         renderMessages(chat.messages, true);
         if (interruptNote) { const b = box.querySelector('.msg-col > .msg-block:last-child .m-content'); if (b) noteStreamInterrupt(b, interruptNote); }
+        return chat.messages.some((m) => m.role === 'assistant');
+      }
+      return true; // someone else already owns the view — don't fight it
+    };
+    pull().then((chat) => {
+      if (!paint(chat)) {
+        // assistant row not visible yet (server still finishing the INSERT) — one quiet retry
+        setTimeout(() => { pull().then(paint).catch(() => {}); }, 1500);
       }
     }).catch(() => {});
     loadChats().catch(() => {});
@@ -1930,7 +1948,7 @@ async function loadAdminPanel() {
   gmSel.innerHTML = allModelsCache.map(m => `<option value="${esc(m)}" ${m === settings.default_model ? 'selected' : ''}>${esc(m)}</option>`).join('');
   enhanceModelSelects();
   $('#set-hist-budget').value = settings.history_token_budget || 1600;
-  $('#set-max-reply').value = settings.max_reply_tokens || 1024;
+  $('#set-max-reply').value = settings.max_reply_tokens || 4096;
   $('#set-timeout').value = settings.timeout_ms || 120;
   $('#set-gen-max').value = settings.gen_limit_max || 30;
   $('#set-gen-window').value = settings.gen_limit_window_sec || 90;
@@ -2330,7 +2348,7 @@ $('#ops-audit-more').addEventListener('click', () => { auditOffset += AUDIT_PAGE
 $('#token-reset').addEventListener('click', async () => {
   const body = {
     history_token_budget: 1600,
-    max_reply_tokens: 1024,
+    max_reply_tokens: 4096,
     timeout_ms: 120,
     gen_limit_max: 30,
     gen_limit_window_sec: 90,
@@ -2344,7 +2362,7 @@ $('#token-reset').addEventListener('click', async () => {
   const data = await r.json();
   if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
   $('#set-hist-budget').value = 1600;
-  $('#set-max-reply').value = 1024;
+  $('#set-max-reply').value = 4096;
   $('#set-timeout').value = 120;
   $('#set-gen-max').value = 30;
   $('#set-gen-window').value = 90;

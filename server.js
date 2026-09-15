@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.26';
+const APP_VERSION = '1.0-beta.29';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -371,6 +371,16 @@ function purgeOldGuests() {
     delChats.run(-d.guest_id);
     delSess.run(d.guest_id);
   }
+}
+
+// stream-friendly watchdog: abort only after `ms` WITHOUT bytes (not after ms of total
+// streaming — long replies were being killed mid-flight by the old whole-request timeout)
+function idleSignal(ms) {
+  const ctrl = new AbortController();
+  let timer = setTimeout(() => ctrl.abort(), ms);
+  ctrl.kick = () => { clearTimeout(timer); timer = setTimeout(() => ctrl.abort(), ms); };
+  ctrl.done = () => clearTimeout(timer);
+  return ctrl;
 }
 
 async function routerFetch(pathname, opts = {}) {
@@ -907,7 +917,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
 
   // --- token-saving context builder ---
   const HISTORY_BUDGET = getSettingInt('history_token_budget', 1600); // ~window lama, tapi berdasarkan token
-  const MAX_REPLY_TOKENS = getSettingInt('max_reply_tokens', 1024);  // cap output
+  const MAX_REPLY_TOKENS = getSettingInt('max_reply_tokens', 4096);  // cap output
   const lean = !!chat.lean;
   const history = lean ? [] : buildHistory(chat.id, chat.summary_upto_id || 0, HISTORY_BUDGET);
   const systemPrompt = buildSystemPrompt(req.user, chat);
@@ -930,6 +940,8 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
   let aborted = false;
   res.on('close', () => { if (!res.writableEnded) aborted = true; });
 
+  let truncated = false;
+  const idle = idleSignal(getTimeoutMs());
   try {
     const upstream = await routerFetch('/chat/completions', {
       method: 'POST',
@@ -939,7 +951,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
         stream: true,
         max_tokens: MAX_REPLY_TOKENS
       }),
-      signal: AbortSignal.timeout(getTimeoutMs())
+      signal: idle.signal
     });
 
     if (!upstream.ok) {
@@ -955,6 +967,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
     while (true) {
       const { done, value } = await reader.read();
       if (done || aborted) break;
+      idle.kick();
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -962,6 +975,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
         if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
         try {
           const chunk = JSON.parse(line.slice(6));
+          if (chunk.choices?.[0]?.finish_reason === 'length') truncated = true;
           const delta = chunk.choices?.[0]?.delta;
           if (delta && delta.content) {
             aiReply += delta.content;
@@ -998,17 +1012,20 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
         if (!req.guest) scheduleMemoryUpdate(req.user, chat, [...history, { role: 'user', content: cleanMessage }, { role: 'assistant', content: aiReply }]);
       }
     }
+    idle.done();
+    if (truncated && aiReply) res.write(`data: ${JSON.stringify({ note: 'ERR_LENGTH' })}\n\n`);
     res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens } })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
+    idle.done();
     if (aiReply) {
       db.prepare('INSERT INTO messages (chat_id, role, content, tokens) VALUES (?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens);
       countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
     }
     const friendly = e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code
-      : (e.name === 'TimeoutError' || /timed? ?out/i.test(String(e.message || '')))
-        ? 'ERR_TIMEOUT'
+      : (e.name === 'TimeoutError' || e.name === 'AbortError' || /timed? ?out|abort/i.test(String(e.message || '')))
+        ? 'ERR_TIMEOUT' // includes idle-stream watchdog firing
         : ('9Router/failed: ' + (e.message || 'unknown error')).slice(0, 300);
     // reply already streamed & saved -> soft 'partial' note; never erase what the user can see
     if (aiReply && !aborted) res.write(`data: ${JSON.stringify({ partial: friendly })}\n\n`);
@@ -1074,6 +1091,7 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
     ? [{ role: 'user', content: sanitizeMessage(message.trim()) }]
     : [{ role: 'system', content: systemPrompt }, { role: 'user', content: sanitizeMessage(message.trim()) }];
 
+  const idle = idleSignal(getTimeoutMs());
   try {
     const upstream = await routerFetch('/chat/completions', {
       method: 'POST',
@@ -1081,9 +1099,9 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
         model: effectiveModel,
         messages,
         stream: true,
-        max_tokens: getSettingInt('max_reply_tokens', 1024)
+        max_tokens: getSettingInt('max_reply_tokens', 4096)
       }),
-      signal: AbortSignal.timeout(getTimeoutMs())
+      signal: idle.signal
     });
 
     if (!upstream.ok) {
@@ -1099,6 +1117,7 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
     while (true) {
       const { done, value } = await reader.read();
       if (done || aborted) break;
+      idle.kick();
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -1122,15 +1141,16 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
         } catch (_) {}
       }
     }
+    idle.done();
     countRequest(req.user, tokens, 0, 0, req.guest ? 'guest' : (lean ? 'eco' : 'temp'), effectiveModel);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
     const friendly = e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code
-      : (e.name === 'TimeoutError' || /timed? ?out/i.test(String(e.message || '')))
-        ? 'ERR_TIMEOUT'
+      : (e.name === 'TimeoutError' || e.name === 'AbortError' || /timed? ?out|abort/i.test(String(e.message || '')))
+        ? 'ERR_TIMEOUT' // includes idle-stream watchdog firing
         : ('9Router/failed: ' + (e.message || 'unknown error')).slice(0, 300);
-    if (aiTempReply && !aborted) res.write(`data: ${JSON.stringify({ partial: friendly })}\n\n`);
+    if (aiTempReply && !aborted) res.write(`data: ${JSON.stringify({ partial: friendly })}\n\n}`);
     else if (!aborted) res.write(`data: ${JSON.stringify({ error: friendly })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
@@ -1149,7 +1169,7 @@ app.get('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
   res.json({
     default_model: getGlobalModel(),
     history_token_budget: getSettingInt('history_token_budget', 1600),
-    max_reply_tokens: getSettingInt('max_reply_tokens', 1024),
+    max_reply_tokens: getSettingInt('max_reply_tokens', 4096),
     memory_enabled: getSetting('memory_enabled') !== '0',
     timeout_ms: getTimeoutMs() / 1000,
     guest_enabled: guestEnabled(),
@@ -1175,7 +1195,7 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
   }
   if (max_reply_tokens !== undefined) {
     const n = Number(max_reply_tokens);
-    if (!Number.isFinite(n) || n < 64 || n > 8192) return res.status(400).json({ error: 'ERR_BAD_MAXTOK' });
+    if (!Number.isFinite(n) || n < 64 || n > 16384) return res.status(400).json({ error: 'ERR_BAD_MAXTOK' });
     setSetting('max_reply_tokens', String(Math.round(n)));
   }
   if (memory_enabled !== undefined) setSetting('memory_enabled', memory_enabled ? '1' : '0');
@@ -1212,7 +1232,7 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
   }
   chatLimiter.setLimits(genPolicy()); // apply live, no restart needed
   audit(req.user, 'settings_update', null, Object.keys(req.body || {}).join(','));
-  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 1024), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes, guest_purge_hour: purgeHour(), gen_limit_max: genPolicy().max, gen_limit_window_sec: Math.round(genPolicy().windowMs / 1000) });
+  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 4096), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes, guest_purge_hour: purgeHour(), gen_limit_max: genPolicy().max, gen_limit_window_sec: Math.round(genPolicy().windowMs / 1000) });
 });
 
 // ---------- admin: usage statistics ----------
