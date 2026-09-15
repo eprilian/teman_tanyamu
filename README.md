@@ -573,7 +573,7 @@ when the request arrives via HTTPS.
 
 ---
 
-### Night of Reliability (v1.0-beta.21 → .22)
+### Night of Reliability (v1.0-beta.21 → .24)
 Fitur operasional level produksi:
 - **Backup otomatis**: tiap boot + harian ke `backups/` (retensi 30 hari), plus tombol "Back up database now" di panel **Sistem & Operasi** pada Admin Dashboard. CLI: `./manage.sh backup` / `restore <file>` / `vacuum`.
 - **Audit trail**: login, aksi admin, purge, share, rate-limit tercatat ke tabel `audit` (maks 2000 baris) dan tampil di panel Ops (paginated).
@@ -585,9 +585,19 @@ Fitur operasional level produksi:
 - **Throttle configurable (v1.0-beta.22)** — Admin → Token Saver: "Max calls" + "per seconds"
   side-by-side with an inline explainer note (5–1000 / 10–600); stored in settings, applied live
   without restart, audit-tracked.
-- **Motion layer (v1.0-beta.23)** — chat bubbles rise-in, history & audit rows stagger, stat cards
-  cascade, send button pulses while streaming, login card entrance, focus glow rings, theme
-  cross-fade, button press feedback — all honoring `prefers-reduced-motion`.
+- **Motion layer (v1.0-beta.23 → .24)** — chat bubbles rise-in, history & audit rows stagger, stat
+  cards cascade, send button pulses while streaming, login card + footer + form staggered entrance,
+  app↔login cross-fade on login/logout, wrong-password shake, focus glow rings, theme cross-fade,
+  button press feedback — all honoring `prefers-reduced-motion`.
+- **Fast chat path (v1.0-beta.24)** — measured login 2–6 s → **0.5 s**: `/api/models` cached 60 s
+  server-side (stale-on-error), boot parallelized (models ∥ chats), post-reply refresh moved
+  off the critical path (non-blocking silent re-render, no animation replay), hidden background
+  LLM tasks (title/summary/memory) queued + delayed 2.5 s so they never steal gateway bandwidth
+  from the next visible message.
+- **Never lose a visible reply (v1.0-beta.24)** — if the upstream drops AFTER the answer was
+  streamed & saved, you now get a soft "⚠ interrupted" note instead of the answer being replaced
+  by an error; SSE heartbeat every 10 s prevents idle connection drops; server always emits
+  `[DONE]` so the client never hangs.
 - **Versi konsisten**: `package.json` `1.0.0-beta.23` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
 
 ## Changelog

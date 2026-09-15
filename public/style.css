@@ -870,3 +870,46 @@ body { transition: background-color 180ms ease, color 180ms ease; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ---------- v1.0-beta.24 motion upgrades ---------- */
+/* login -> app swap */
+#login-view { transition: opacity 160ms ease, transform 160ms ease; }
+#login-view.leaving { opacity: 0; transform: scale(.985); }
+/* app appears via animation (display:none -> block has no transition), leaves via class+JS delay.
+   fill=backwards so after entrance the element returns to normal cascade (opacity 1),
+   letting .leaving fade out with a transition. */
+#app-view.ready { animation: softIn 260ms ease backwards; }
+#app-view { transition: opacity 160ms ease, transform 160ms ease; }
+#app-view.leaving { opacity: 0; transform: scale(.99); }
+/* staggered login card pieces */
+.login-card { animation: riseIn 340ms cubic-bezier(.16,1,.3,1) both; }
+.login-card h1 { animation: riseIn 380ms cubic-bezier(.16,1,.3,1) 60ms both; }
+.login-card .sub { animation: riseIn 380ms cubic-bezier(.16,1,.3,1) 110ms both; }
+#login-form label, #login-form input { animation: riseIn 380ms cubic-bezier(.16,1,.3,1) 150ms both; }
+#login-form { animation: riseIn 400ms cubic-bezier(.16,1,.3,1) 190ms both; }
+.login-foot { animation: softIn 500ms ease 320ms both; }
+/* wrong password: shake */
+@keyframes shakeX { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-7px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(3px); } }
+.login-card.shake { animation: shakeX 420ms cubic-bezier(.36,.07,.19,.97) both; }
+/* interrupted-stream soft note (reply stays visible above it) */
+.m-interrupted { margin-top: 6px; font-size: 11px; color: var(--warning); opacity: .9; animation: softIn 220ms ease; }
+/* sidebar buttons hover lift */
+#btn-new-chat, .icon-btn, #btn-settings, #btn-admin, #btn-logout { transition: background 120ms, color 120ms, transform 120ms cubic-bezier(.16,1,.3,1); }
+#btn-new-chat:hover, .icon-btn:hover { transform: translateY(-1px); }
+/* send button spring */
+#btn-send { transition: background 120ms, transform 140ms cubic-bezier(.34,1.56,.64,1); }
+#btn-send:not(.stop):hover { transform: scale(1.07); }
+#btn-send:not(.stop):active { transform: scale(.92); }
+/* history item press */
+.chat-item:active { transform: scale(.985); transition: transform 80ms; }
+/* toast entrance gets springier */
+#toast { transform: translateX(-50%) translateY(14px) scale(.96); }
+#toast.show { transform: translateX(-50%) translateY(0) scale(1); }
+/* model combobox open */
+.model-combo-pop { transform-origin: top center; }
+/* message actions fade with a hint of rise */
+.msg-block .m-actions { transform: translateY(2px); transition: opacity 120ms, transform 120ms; }
+.msg-block .m-actions.show, .msg-block:hover .m-actions { transform: none; }
+
+/* quiet re-render (silent server-truth refresh): skip bubble entrance anim */
+.msg-col.no-anim .msg-block { animation: none; }

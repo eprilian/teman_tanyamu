@@ -379,6 +379,8 @@ $('#login-form').addEventListener('submit', async (e) => {
     } else {
       errEl.textContent = terr(data.error) || t('err_login');
     }
+    const card = $('#login-view .login-card');
+    if (card) { card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake'); }
     return;
   }
   await enterApp();
@@ -399,28 +401,45 @@ $('#logout-ok').addEventListener('click', async () => {
   $('#modal-logout').classList.remove('active');
   if (abortCtrl) abortCtrl.abort(); // stop stream berjalan
   await fetch('/api/logout', { method: 'POST' });
-  stopGuestTimer();
-  currentUser = null;
-  currentChatId = null;
-  chats = [];
-  allModelsCache = [];
-  $('#app-view').classList.remove('ready', 'active');
-  $('#btn-admin').classList.remove('show');
-  $('#login-view').style.display = '';
-  $('#login-view').classList.add('ready');
-  $('#login-user').value = '';
-  $('#login-pass').value = '';
-  $('#login-error').textContent = '';
-  $('#model-select').innerHTML = '';
-  $('#chat-list').innerHTML = '';
-  $('#chat-search').value = '';
-  $('#messages').innerHTML = '';
-  $('#modal-admin').classList.remove('active');
-  history.replaceState({}, '', '/');
-  document.title = 'Teman Tanyamu';
-  refreshGuestButton();
-  $('#login-user').focus();
+  leavingToLogin(() => {
+    stopGuestTimer();
+    currentUser = null;
+    currentChatId = null;
+    chats = [];
+    allModelsCache = [];
+    $('#btn-admin').classList.remove('show');
+    $('#login-user').value = '';
+    $('#login-pass').value = '';
+    $('#login-error').textContent = '';
+    $('#model-select').innerHTML = '';
+    $('#chat-list').innerHTML = '';
+    $('#chat-search').value = '';
+    $('#messages').innerHTML = '';
+    $('#modal-admin').classList.remove('active');
+    history.replaceState({}, '', '/');
+    document.title = 'Teman Tanyamu';
+  });
+  setTimeout(() => { refreshGuestButton(); $('#login-user').focus(); }, 180);
 });
+
+function showLoginViewAnimated() {
+  $('#app-view').classList.remove('ready', 'active', 'leaving');
+  const lv = $('#login-view');
+  lv.style.display = '';
+  lv.classList.add('ready');
+  // re-trigger entrance on the card + footer (element was visible:hidden before -> force restart)
+  const lc = lv.querySelector('.login-card');
+  if (lc) lc.classList.remove('shake');
+  for (const sel of ['.login-card', '#login-foot-el', '#login-btn-el']) {
+    const el = lv.querySelector(sel);
+    if (el) { el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; }
+  }
+}
+function leavingToLogin(after) {
+  const av = $('#app-view');
+  av.classList.add('leaving');
+  setTimeout(() => { after(); showLoginViewAnimated(); }, 160);
+}
 
 async function enterApp() {
   let r;
@@ -429,15 +448,16 @@ async function enterApp() {
   } catch (e) { return; }
   if (!r.ok) return;
   currentUser = await r.json();
-  $('#login-view').style.display = 'none';
+  const lv = $('#login-view');
+  lv.classList.add('leaving');
+  setTimeout(() => { lv.style.display = 'none'; lv.classList.remove('ready', 'leaving'); }, 160);
   $('#app-view').classList.add('ready', 'active');
   $('#lbl-user').textContent = currentUser.username;
   renderSideAvatar();
   updateQuota();
   syncGuestState();
   if (currentUser.role === 'admin') $('#btn-admin').classList.add('show');
-  await loadModels();
-  await loadChats();
+  await Promise.all([loadModels(), loadChats()]); // parallel boot: no serial gateway wait
   updateModelBadge();
   await applyWallpaper();
 }
@@ -1263,7 +1283,7 @@ async function openChat(id) {
 }
 
 let lastRendered = [];
-function renderMessages(messages) {
+function renderMessages(messages, quiet) {
   lastRendered = messages || [];
   const box = $('#messages');
   if (!lastRendered.length) { box.innerHTML = emptyStateHTML(); return; }
@@ -1272,7 +1292,7 @@ function renderMessages(messages) {
     if (m.role === 'user') lastUserId = m.id;
     return messageHTML(m.role, m.content, false, m.id, lastUserId);
   });
-  box.innerHTML = `<div class="msg-col">${parts.join('')}</div>`;
+  box.innerHTML = `<div class="msg-col${quiet ? ' no-anim' : ''}">${parts.join('')}</div>`;
   box.scrollTop = box.scrollHeight;
 }
 
@@ -1481,6 +1501,7 @@ async function sendTemp(text) {
         try {
           const chunk = JSON.parse(line.slice(6));
           if (chunk.error) throw new Error(chunk.error);
+          if (chunk.partial) { noteStreamInterrupt(bubble, chunk.partial); continue; }
           if (chunk.content) {
             aiText += chunk.content;
             bubble.innerHTML = renderMarkdown(aiText);
@@ -1496,7 +1517,8 @@ async function sendTemp(text) {
       const msg = ERR_MAP[e.message] ? terr(e.message) : e.message;
       toast(msg, 'error');
       const b = getStreamBubble(box);
-      if (b) b.innerHTML = `<span style="color:var(--danger)">${esc(t('err_generic'))}: ${esc(msg)}</span>`;
+      if (b && b.querySelector('.typing-dots')) b.innerHTML = `<span style="color:var(--danger)">${esc(t('err_generic'))}: ${esc(msg)}</span>`;
+      else if (b) noteStreamInterrupt(b, msg);
     }
   } finally {
     streaming = false;
@@ -1572,6 +1594,7 @@ async function send() {
     const decoder = new TextDecoder();
     let aiText = '';
     let lastUsage = null;
+    let interruptNote = null;
     let buffer = '';
     const bubble = getStreamBubble(box);
 
@@ -1586,6 +1609,7 @@ async function send() {
         try {
           const chunk = JSON.parse(line.slice(6));
           if (chunk.error) throw new Error(chunk.error);
+          if (chunk.partial) { interruptNote = chunk.partial; noteStreamInterrupt(bubble, chunk.partial); continue; } // reply saved & visible: soft note only
           if (chunk.usage) { lastUsage = chunk.usage; continue; }
           if (chunk.content) {
             aiText += chunk.content;
@@ -1611,26 +1635,41 @@ async function send() {
       const msg = ERR_MAP[e.message] ? terr(e.message) : e.message;
       toast(msg, 'error');
       const b = getStreamBubble(box);
-      if (b && !b.querySelector('.typing-dots')) b.innerHTML = `<span style="color:var(--danger)">${esc(t('err_generic'))}: ${esc(msg)}</span>`;
+      if (b && b.querySelector('.typing-dots')) b.innerHTML = `<span style="color:var(--danger)">${esc(t('err_generic'))}: ${esc(msg)}</span>`;
+      else if (b) noteStreamInterrupt(b, msg); // keep what's on screen, append a quiet warning
     }
   } finally {
     streaming = false;
     btnSend.classList.remove('stop');
     btnSend.innerHTML = SEND_ICON;
     abortCtrl = null;
-    await loadChats();
     // like ChatGPT/Gemini: URL lands in the bar once the reply is finished
     if (currentChatId && !isGuest()) { try { go('/c/' + currentChatId); } catch (_) {} }
-    // rebuild bubbles from server truth so they carry message ids (edit/truncate actions)
-    try {
-      const chat = await (await fetch(`/api/chats/${currentChatId}`)).json();
-      if (chat.messages && chat.messages.length) {
-        renderMessages(chat.messages);
+    const cid = currentChatId;
+    // server-truth refresh happens OFF the critical path: bubbles already show the answer;
+    // message ids (edit/truncate actions) are patched in silently when it arrives.
+    fetch(`/api/chats/${cid}`).then((r) => (r.ok ? r.json() : null)).then((chat) => {
+      if (chat && chat.messages && chat.messages.length && currentChatId === cid && !streaming) {
+        renderMessages(chat.messages, true);
+        if (interruptNote) { const b = box.querySelector('.msg-col > .msg-block:last-child .m-content'); if (b) noteStreamInterrupt(b, interruptNote); }
       }
-    } catch (_) {}
-    const me = await (await fetch('/api/me')).json();
-    if (me.username) { currentUser = me; updateQuota(); afterGuestRefresh(); }
+    }).catch(() => {});
+    loadChats().catch(() => {});
+    fetch('/api/me').then((r) => r.json()).then((me) => {
+      if (me.username) { currentUser = me; updateQuota(); afterGuestRefresh(); }
+    }).catch(() => {});
   }
+}
+
+// quiet "connection dropped after the answer" marker — never destroys visible content
+function noteStreamInterrupt(bubble, why) {
+  if (!bubble || bubble.querySelector('.m-interrupted')) return;
+  const note = document.createElement('div');
+  note.className = 'm-interrupted';
+  note.textContent = '⚠ ' + (ERR_MAP[why] ? terr(why) : why);
+  note.title = String(why);
+  const bodyEl = bubble.closest('.m-body') || bubble.parentElement;
+  if (bodyEl) bodyEl.appendChild(note); else bubble.after(note);
 }
 
 // ---------- temporary chat toggle ----------

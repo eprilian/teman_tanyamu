@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.23';
+const APP_VERSION = '1.0-beta.24';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -208,6 +208,18 @@ function genPolicy() {
   return { max, windowMs: win * 1000 };
 }
 const chatLimiter = makeLimiter(genPolicy());
+function startSse(req, res) {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  // keepalive: proxies/browsers drop idle connections; comment lines are ignored by parsers
+  const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch (_) {} }, 10000);
+  const stop = () => clearInterval(hb);
+  res.on('finish', stop); res.on('close', stop);
+  return stop;
+}
+
 function requireGenLimit(req, res, next) {
   const key = req.guest ? ('g:' + get_client_ip(req)) : ('u:' + req.user.id);
   if (!chatLimiter.allow(key)) {
@@ -466,9 +478,16 @@ async function nonStreamChat(model, messages, maxTokens, timeoutMs) {
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
 }
 
-// fire-and-forget background LLM task: never breaks the main reply
-async function bgTask(label, fn) {
-  try { await fn(); } catch (e) { log('warn', 'bg_task_failed', { task: label, msg: String(e.message || e) }); }
+// fire-and-forget background LLM task: never breaks the main reply.
+// #perf: runs after a short grace period AND one-at-a-time, so hidden
+// title/summary/memory calls never steal gateway bandwidth from the
+// user's next visible message.
+let bgChain = Promise.resolve();
+function bgTask(label, fn) {
+  bgChain = bgChain
+    .then(() => new Promise((r) => setTimeout(r, 2500)))
+    .then(fn)
+    .catch((e) => log('warn', 'bg_task_failed', { task: label, msg: String(e.message || e) }));
 }
 
 const MEMORY_SYSTEM = 'Kamu adalah modul memori. Dari percakapan, tulis fakta PERSONAL tentang user yang berguna di chat mendatang (nama/ panggilan, oshi/preferensi, proyek, bahasa, gaya jawab, larangan). BUKAN topik chat sementara, BUKAN jawaban asisten. Keluaran: maksimal 20 baris, tiap baris diawali "- " lalu satu fakta singkat (<=200 karakter), bahasa Indonesia. Jika tidak ada fakta baru dari percakapan, kembalikan daftar lama apa adanya.';
@@ -801,13 +820,26 @@ app.delete('/api/chats/:id/messages/:msgId', requireAuth, (req, res) => {
 });
 
 // ---------- models ----------
+// model list cache: gateway /models is slow (2-6 s) and boot-blocking; cache 60 s, serve stale on failure
+let modelsCache = { at: 0, base: '', key: '', ids: null };
+function invalidateModelsCache() { modelsCache.ids = null; }
 app.get('/api/models', requireAuth, async (req, res) => {
   if (!routerConfigured()) return res.status(503).json({ error: 'ERR_ROUTER_NOT_CONFIGURED' });
+  const base = getRouterBase(), key = getRouterKey();
+  if (modelsCache.ids && modelsCache.base === base && modelsCache.key === key && Date.now() - modelsCache.at < 60000) {
+    return res.json(modelsCache.ids);
+  }
   try {
-    const r = await routerFetch('/models');
+    const r = await routerFetch('/models', { signal: AbortSignal.timeout(15000) });
     const data = await r.json();
-    res.json(data.data.map(m => m.id));
+    const ids = data.data.map(m => m.id);
+    modelsCache = { at: Date.now(), base, key, ids };
+    res.json(ids);
   } catch (e) {
+    if (modelsCache.ids) { // gateway down/slow: last known good list beats an error toast
+      log('warn', 'models_stale_cache', { age_ms: Date.now() - modelsCache.at });
+      return res.json(modelsCache.ids);
+    }
     res.status(502).json({ error: e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code : 'ERR_ROUTER_DOWN' });
   }
 });
@@ -865,10 +897,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chat.id);
   }
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
+  startSse(req, res);
 
   let aiReply = '';
   let tokens = 0;
@@ -957,7 +986,10 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
       : (e.name === 'TimeoutError' || /timed? ?out/i.test(String(e.message || '')))
         ? 'ERR_TIMEOUT'
         : ('9Router/failed: ' + (e.message || 'unknown error')).slice(0, 300);
-    res.write(`data: ${JSON.stringify({ error: friendly })}\n\n`);
+    // reply already streamed & saved -> soft 'partial' note; never erase what the user can see
+    if (aiReply && !aborted) res.write(`data: ${JSON.stringify({ partial: friendly })}\n\n`);
+    else if (!aborted) res.write(`data: ${JSON.stringify({ error: friendly })}\n\n`);
+    res.write('data: [DONE]\n\n');
     res.end();
   }
 });
@@ -1006,10 +1038,7 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
 
   const effectiveModel = req.user.role === 'admin' ? (model || resolveUserModel(req.user)) : resolveUserModel(req.user);
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
+  startSse(req, res);
 
   let tokens = 0;
   let aiTempReply = '';
@@ -1077,7 +1106,9 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
       : (e.name === 'TimeoutError' || /timed? ?out/i.test(String(e.message || '')))
         ? 'ERR_TIMEOUT'
         : ('9Router/failed: ' + (e.message || 'unknown error')).slice(0, 300);
-    res.write(`data: ${JSON.stringify({ error: friendly })}\n\n`);
+    if (aiTempReply && !aborted) res.write(`data: ${JSON.stringify({ partial: friendly })}\n\n`);
+    else if (!aborted) res.write(`data: ${JSON.stringify({ error: friendly })}\n\n`);
+    res.write('data: [DONE]\n\n');
     res.end();
   }
 });
@@ -1231,6 +1262,7 @@ app.put('/api/admin/router-config', requireAuth, requireAdmin, async (req, res) 
       setSetting('router_key', k);
     }
   }
+  invalidateModelsCache(); // new gateway -> refetch list next call
   res.json({ ok: true, base_url: getRouterBase() || '', api_key_masked: maskKey(getRouterKey()), configured: routerConfigured() });
 });
 
