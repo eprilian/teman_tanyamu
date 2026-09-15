@@ -810,3 +810,19 @@ body.light #toast { box-shadow: 0 6px 24px rgba(0,0,0,0.18); }
 
     .modal { padding: 18px 16px; }
 }
+
+/* ---------- #1/#7 admin System & Operations ---------- */
+.ops-row { display: flex; gap: 8px; margin: 6px 0 10px; }
+.ops-audit-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.ops-audit { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 4px; }
+.audit-row { display: grid; grid-template-columns: 22px 92px 90px 1fr; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 7px; font-size: 12px; }
+.audit-row:nth-child(odd) { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.audit-ic { text-align: center; }
+.audit-when { color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.audit-actor { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-act { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-empty { padding: 12px; text-align: center; font-size: 12px; color: var(--text-2); }
+@media (max-width: 640px) {
+  .audit-row { grid-template-columns: 20px 1fr; }
+  .audit-actor, .audit-act { grid-column: 2; }
+}

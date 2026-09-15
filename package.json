@@ -1,10 +1,11 @@
 {
   "name": "dash_ai_me",
-  "version": "1.0.0",
+  "version": "1.0.0-beta.21",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test/e2e.test.js",
+    "start": "node server.js"
   },
   "keywords": [],
   "type": "commonjs",

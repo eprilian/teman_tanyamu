@@ -194,6 +194,63 @@ NODEEOF
   warn "Segera ganti password lewat UI: Pengaturan Akun -> Ganti Password"
 }
 
+cmd_test() {
+  if ! service_running; then
+    err "Service harus berjalan untuk regression suite: ./manage.sh start"
+    exit 1
+  fi
+  node "$APP_DIR/test/e2e.test.js"
+}
+
+cmd_backup() {
+  local dest="$APP_DIR/backups"
+  mkdir -p "$dest"
+  local ts file
+  ts=$(date +%F-%H%M%S)
+  file="$dest/chat-manual-$ts.db"
+  info "Mencadangkan chat.db -> $file"
+  node -e '
+    const Database = require("better-sqlite3");
+    const db = new Database("chat.db", { readonly: false });
+    db.backup(process.argv[1]).then(() => { console.log("[INFO] Backup OK"); db.close(); })
+      .catch((e) => { console.error("[ERROR] " + e.message); process.exit(1); });
+  ' "$file" || exit 1
+  # prune manual+auto backups older than 30 days
+  find "$dest" -name 'chat-*.db' -mtime +30 -print -delete | sed 's/^/[INFO] hapus lama: /' || true
+  ls -1t "$dest" | head -3 | sed 's/^/[INFO] terbaru: /'
+}
+
+cmd_restore() {
+  local src="${1:-}"
+  if [[ -z "$src" ]]; then
+    err "Usage: ./manage.sh restore <path-backup.db>"
+    ls -1t "$APP_DIR/backups" 2>/dev/null | head -5 | sed 's/^/  tersedia: /'
+    exit 1
+  fi
+  [[ -f "$src" ]] || { err "File tidak ditemukan: $src"; exit 1; }
+  warn "RESTORE akan MENIMPA chat.db saat ini dengan: $src"
+  warn "Backup kondisi sekarang dulu? (Y/n)"
+  read -r ans
+  [[ "$ans" == "n" || "$ans" == "N" ]] || cmd_backup
+  if service_running; then cmd_stop; fi
+  cp -a "$APP_DIR/chat.db" "$APP_DIR/chat.db.pre-restore"
+  cp -a "$src" "$APP_DIR/chat.db"
+  rm -f "$APP_DIR/chat.db-wal" "$APP_DIR/chat.db-shm"
+  node -e 'const D=require("better-sqlite3");const db=new D("chat.db");const n=db.prepare("SELECT COUNT(*) c FROM chats").get().c;console.log("[INFO] Restore OK. Validasi: " + n + " chats.");db.close();'
+  cmd_start
+}
+
+cmd_vacuum() {
+  if service_running; then
+    warn "Service berjalan — vacuum tetap aman (online), tapi mungkin lebih lambat."
+  fi
+  local before after
+  before=$(stat -c%s "$APP_DIR/chat.db" 2>/dev/null || stat -f%z "$APP_DIR/chat.db")
+  node -e 'const D=require("better-sqlite3");new D("chat.db").exec("VACUUM;");console.log("[INFO] VACUUM selesai.");'
+  after=$(stat -c%s "$APP_DIR/chat.db" 2>/dev/null || stat -f%z "$APP_DIR/chat.db")
+  info "Ukuran DB: $before -> $after bytes ($(( (before-after)/1024 )) KiB dihemat)"
+}
+
 cmd_help() {
   echo -e "${BLUE}Teman Tanyamu Management Script${NC}"
   echo ""
@@ -205,11 +262,15 @@ cmd_help() {
   echo "  restart          Restart service"
   echo "  status           Lihat status service"
   echo "  port <1-65535>   Ubah port (persisten, auto-restart)"
+  echo "  backup           Cadangkan chat.db ke ./backups (retensi 30 hari)"
+  echo "  restore <file>   Pulihkan chat.db dari file backup (auto-backup dulu)"
+  echo "  vacuum           Kompaksi database (hemat ruang)"
   echo "  clear-cache      Bersihkan SQLite WAL + npm cache + journal lama"
   echo "  enable-boot      Aktifkan autostart saat boot"
   echo "  disable-boot     Nonaktifkan autostart saat boot"
   echo "  logs [n]         Lihat n baris log terakhir (default 50)"
   echo "  password         Reset password admin ke admin123"
+  echo "  test             Jalankan regression suite"
   echo "  help             Tampilkan bantuan ini"
 }
 
@@ -225,6 +286,10 @@ case "${1:-help}" in
   disable-boot) cmd_disable_boot ;;
   logs)         cmd_logs "${2:-50}" ;;
   password)     cmd_password ;;
+  backup)       cmd_backup ;;
+  restore)      cmd_restore "${2:-}" ;;
+  vacuum)       cmd_vacuum ;;
+  test)         cmd_test ;;
   help|--help|-h) cmd_help ;;
   *)
     err "Perintah tidak dikenal: $1"

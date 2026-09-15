@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teman Tanyamu</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="stylesheet" href="/style.css?v=1.0-beta.20">
+<link rel="stylesheet" href="/style.css?v=1.0-beta.21">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hljs-css">
 <script src="/vendor/highlight.min.js" defer></script>
 </head>
@@ -298,6 +298,17 @@
       </div>
     </div>
     <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
+    <h3 style="font-size:13.5px;" id="admin-ops-title">System &amp; Operations</h3>
+    <p class="modal-sub" style="margin-bottom:8px;" id="admin-ops-sub">Automatic daily backups (30 days) live in ./backups on the server.</p>
+    <div class="ops-row">
+      <button class="btn-ghost" id="ops-backup">Back up database now</button>
+    </div>
+    <div class="ops-audit-head">
+      <span id="ops-audit-title">Recent activity</span>
+      <button class="btn-ghost" id="ops-audit-more" style="padding:4px 10px; font-size:11.5px; border-radius:7px; display:none;">Load more</button>
+    </div>
+    <div class="ops-audit" id="ops-audit"></div>
+    <hr style="border:none; border-top:1px solid var(--border); margin:14px 0 4px;">
     <h3 style="font-size:13.5px;" id="admin-stat-title">Usage Statistics</h3>
     <p class="modal-sub" style="margin-bottom:8px;" id="admin-stat-sub">Last 30 days across all users.</p>
     <div class="stat-toolbar" style="margin-bottom:8px;">
@@ -411,6 +422,7 @@
 
 <div id="toast" role="status"></div>
 
-<script src="/app.js?v=1.0-beta.20"></script>
+<script src="/i18n.js?v=1.0-beta.21"></script>
+<script src="/app.js?v=1.0-beta.21"></script>
 </body>
 </html>

@@ -3,7 +3,11 @@ const express = require('express');
 const Database = require('better-sqlite3');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 const dns = require('node:dns/promises');
+
+// #9: the single source of truth for the app version (git tags point here too)
+const APP_VERSION = '1.0-beta.21';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -14,6 +18,10 @@ const SESSION_DAYS = 7;
 const DAILY_QUOTA_DEFAULT = 50;
 
 const db = new Database(path.join(__dirname, 'chat.db'));
+const { log, info: logInfo } = require('./lib/logger');
+const { makeLimiter } = require('./lib/ratelimit');
+const { shareHTML, notFoundHTML, acceptLang } = require('./lib/share');
+const startedAt = Date.now();
 db.pragma('journal_mode = WAL');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -99,12 +107,23 @@ if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
   const adminPass = process.env.ADMIN_PASSWORD || 'admin123';
   const hash = crypto.scryptSync(adminPass, 'salt-dash-ai-me', 64).toString('hex');
   db.prepare("INSERT INTO users (username, password_hash, role, daily_quota) VALUES (?, ?, 'admin', 999999)").run('admin', hash);
-  console.log('Admin awal: admin/admin123 (ganti segera)');
+  log('warn', 'seed_admin', { note: 'Admin awal dibuat dengan password default — ganti segera' });
 }
 
 const app = express();
 app.set('trust proxy', true); // behind Cloudflare Tunnel / reverse proxy
 app.use(express.json({ limit: '2mb' }));
+// #10: structured request log (API calls only, static assets skipped)
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    const t0 = Date.now();
+    res.on('finish', () => {
+      if (req.path === '/api/health') return; // noise
+      log('info', 'request', { m: req.method, p: req.path, s: res.statusCode, ms: Date.now() - t0 });
+    });
+  }
+  next();
+});
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -178,6 +197,16 @@ function requireRegistered(req, res, next) {
 }
 function requireAdmin(req, res, next) {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'ERR_ADMIN_ONLY' });
+  next();
+}
+// ---------- #5: generation throttle — 30 AI calls / 90 s per user key (guest: per IP) ----------
+const chatLimiter = makeLimiter({ windowMs: 90000, max: 30 });
+function requireGenLimit(req, res, next) {
+  const key = req.guest ? ('g:' + get_client_ip(req)) : ('u:' + req.user.id);
+  if (!chatLimiter.allow(key)) {
+    audit(req.user, 'rate_limit_hit', null, req.path);
+    return res.status(429).json({ error: 'ERR_GEN_LIMITED', retryAfterSec: Math.ceil(chatLimiter.windowMs / 1000) });
+  }
   next();
 }
 
@@ -432,7 +461,7 @@ async function nonStreamChat(model, messages, maxTokens, timeoutMs) {
 
 // fire-and-forget background LLM task: never breaks the main reply
 async function bgTask(label, fn) {
-  try { await fn(); } catch (e) { console.error('[bg:' + label + ']', e.message); }
+  try { await fn(); } catch (e) { log('warn', 'bg_task_failed', { task: label, msg: String(e.message || e) }); }
 }
 
 const MEMORY_SYSTEM = 'Kamu adalah modul memori. Dari percakapan, tulis fakta PERSONAL tentang user yang berguna di chat mendatang (nama/ panggilan, oshi/preferensi, proyek, bahasa, gaya jawab, larangan). BUKAN topik chat sementara, BUKAN jawaban asisten. Keluaran: maksimal 20 baris, tiap baris diawali "- " lalu satu fakta singkat (<=200 karakter), bahasa Indonesia. Jika tidak ada fakta baru dari percakapan, kembalikan daftar lama apa adanya.';
@@ -554,11 +583,13 @@ app.post('/api/login', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!user || !verifyPassword(password, user.password_hash)) {
     recordFailedLogin(ip);
+    audit(null, 'login_fail', String(username).slice(0, 40), 'ip=' + ip);
     const st = getLoginState(ip);
     return res.status(401).json({ error: 'ERR_LOGIN', remainingAttempts: st.remaining });
   }
-  if (!user.active) return res.status(403).json({ error: 'ERR_INACTIVE' });
+  if (!user.active) { audit(null, 'login_inactive', String(username).slice(0, 40), 'ip=' + ip); return res.status(403).json({ error: 'ERR_INACTIVE' }); }
   loginAttempts.delete(ip); // successful login clears failures
+  audit(user, 'login', null, 'ip=' + ip);
   maybeUpgradeHash(user.id, password, user.password_hash);
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now()); // purge expired sessions
   const token = crypto.randomBytes(32).toString('hex');
@@ -571,11 +602,13 @@ app.post('/api/login', (req, res) => {
 });
 
 // Guest sign-in: create/reuse guest session. No credentials; rate-limited by same IP guard as login.
+const guestLimiter = makeLimiter({ windowMs: 60000, max: 12 });
 app.post('/api/guest', (req, res) => {
   if (!guestEnabled()) return res.status(403).json({ error: 'ERR_GUEST_DISABLED' });
   const ip = get_client_ip(req);
   const st = getLoginState(ip);
   if (st.blocked) return res.status(429).json({ error: 'ERR_RATE_LIMITED', retryAfterSec: st.retryAfterSec });
+  if (!guestLimiter.allow(ip)) return res.status(429).json({ error: 'ERR_RATE_LIMITED', retryAfterSec: 60 });
   purgeOldGuests();
   const token = readCookie(req, 'gtoken');
   let row = token ? guestRowByToken(token) : null;
@@ -787,7 +820,7 @@ app.put('/api/wallpaper', requireAuth, requireRegistered, (req, res) => {
 });
 
 // ---------- chat streaming ----------
-app.post('/api/chat', requireAuth, async (req, res) => {
+app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
   const { chatId, message } = req.body || {};
   if (!chatId || !message || !message.trim()) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
 
@@ -956,7 +989,7 @@ app.post('/api/memory/clear', requireAuth, requireRegistered, (req, res) => {
 });
 
 // ---------- temp chat (no history saved) ----------
-app.post('/api/temp-chat', requireAuth, async (req, res) => {
+app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
   const { message, model, lean } = req.body || {};
   if (!message || !message.trim()) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
 
@@ -1103,6 +1136,7 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
     if (!Number.isInteger(n) || n < 0 || n > 23) return res.status(400).json({ error: 'ERR_BAD_PURGE_HOUR' });
     setSetting('guest_purge_hour', String(n));
   }
+  audit(req.user, 'settings_update', null, Object.keys(req.body || {}).join(','));
   res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 1024), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes, guest_purge_hour: purgeHour() });
 });
 
@@ -1218,6 +1252,7 @@ app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   if (!username || !password) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
   try {
     db.prepare('INSERT INTO users (username, password_hash, role, daily_quota) VALUES (?, ?, ?, ?)').run(username, hashPassword(password), role === 'admin' ? 'admin' : 'user', daily_quota || DAILY_QUOTA_DEFAULT);
+    audit(req.user, 'user_add', username, 'role=' + (role === 'admin' ? 'admin' : 'user'));
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: 'ERR_USERNAME_TAKEN' });
@@ -1226,8 +1261,10 @@ app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
 
 app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: 'ERR_SELF_DELETE' });
+  const tu = db.prepare('SELECT username FROM users WHERE id = ?').get(req.params.id);
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  audit(req.user, 'user_delete', tu ? tu.username : req.params.id);
   res.json({ ok: true });
 });
 
@@ -1264,6 +1301,7 @@ app.put('/api/admin/users/:id/password', requireAuth, requireAdmin, (req, res) =
   if (!db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), req.params.id);
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.params.id);
+  audit(req.user, 'user_pwreset', String(req.params.id));
   res.json({ ok: true });
 });
 
@@ -1275,6 +1313,7 @@ app.put('/api/admin/users/:id/active', requireAuth, requireAdmin, (req, res) => 
   if (!db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
   db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
   if (!active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.params.id);
+  audit(req.user, active ? 'user_activate' : 'user_deactivate', String(req.params.id));
   res.json({ ok: true, active });
 });
 
@@ -1327,7 +1366,7 @@ app.get('/api/health', (req, res) => {
 app.use((err, req, res, next) => {
   if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'ERR_BAD_BODY' });
   if (err) {
-    console.error(err);
+    log('error', 'unhandled_request_error', { path: req.path, msg: String(err.message || err), stack: String(err.stack || '').split('\n').slice(0, 4).join(' | ') });
     return res.status(500).json({ error: 'Server error: ' + err.message });
   }
   next();
@@ -1341,6 +1380,27 @@ db.exec(`CREATE TABLE IF NOT EXISTS shared_chats (
   created_at INTEGER NOT NULL
 )`);
 const SHARE_RE = /^[a-f0-9]{16}$/;
+
+// ---------- audit trail (#7): who did what when (admin actions, auth events) ----------
+db.exec(`CREATE TABLE IF NOT EXISTS audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  actor_id INTEGER,
+  actor TEXT,
+  action TEXT NOT NULL,
+  target TEXT,
+  detail TEXT
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_audit_at ON audit(at)');
+function audit(actorUser, action, target, detail) {
+  try {
+    db.prepare('INSERT INTO audit (at, actor_id, actor, action, target, detail) VALUES (?,?,?,?,?,?)')
+      .run(Date.now(), actorUser ? actorUser.id : null, actorUser ? actorUser.username : '-', String(action).slice(0, 64), target == null ? null : String(target).slice(0, 120), detail == null ? null : String(detail).slice(0, 300));
+    // keep last 2000 rows
+    const n = db.prepare('SELECT COUNT(*) n FROM audit').get().n;
+    if (n > 2000) db.prepare('DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT 2000)').run();
+  } catch (e) { log('warn', 'audit_write_failed', { msg: String(e.message || e) }); }
+}
 function shareLookup(token) {
   if (!SHARE_RE.test(String(token))) return null;
   const row = db.prepare('SELECT chat_id FROM shared_chats WHERE token = ?').get(token);
@@ -1364,6 +1424,7 @@ app.post('/api/chats/:id/share', requireAuth, requireRegistered, (req, res) => {
   if (!token) {
     token = crypto.randomBytes(8).toString('hex');
     db.prepare('INSERT INTO shared_chats (token, chat_id, user_id, created_at) VALUES (?, ?, ?, ?)').run(token, chat.id, req.user.id, Date.now());
+    audit(req.user, 'share_create', 'chat=' + chat.id, 'token=' + token.slice(0, 4) + '…');
   }
   res.json({ ok: true, token });
 });
@@ -1376,57 +1437,70 @@ app.delete('/api/chats/:id/share', requireAuth, requireRegistered, (req, res) =>
   const chat = db.prepare('SELECT id FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
   const n = db.prepare('DELETE FROM shared_chats WHERE chat_id = ? AND user_id = ?').run(chat.id, req.user.id).changes;
+  if (n > 0) audit(req.user, 'share_revoke', 'chat=' + chat.id);
   res.json({ ok: true, revoked: n > 0 });
 });
 
-// public read-only share page (no auth, no cookies needed)
-function shareHTML(d) {
-  const escH = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const md = (t) => {
-    let html = escH(t);
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code>${code}</code></pre>`);
-    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\n/g, '<br>');
-    return html;
-  };
-  const msgs = d.messages.map((m) => {
-    const who = m.role === 'user' ? 'You' : 'AI';
-    return `<div class="msg ${m.role}"><div class="who">${who}</div><div class="body">${md(m.content)}</div></div>`;
-  }).join('\n');
-  return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
-<title>${escH(d.title)} · Teman Tanyamu</title>
-<style>
-:root{color-scheme:dark}
-body{margin:0;background:#09090b;color:#fafafa;font:15px/1.6 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
-.wrap{max-width:760px;margin:0 auto;padding:32px 18px 64px}
-.badge{display:inline-flex;align-items:center;gap:8px;background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.4);color:#93c5fd;border-radius:99px;padding:5px 14px;font-size:12.5px;margin-bottom:14px}
-h1{font-size:21px;margin:6px 0 2px}
-.sub{color:#a1a1aa;font-size:13px;margin-bottom:26px}
-.msg{border:1px solid #27272a;border-radius:14px;padding:14px 16px;margin-bottom:12px;background:#101013}
-.msg.user{background:rgba(59,130,246,.07);border-color:rgba(59,130,246,.25)}
-.who{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#71717a;margin-bottom:6px}
-.msg.user .who{color:#93c5fd}.msg.ai .who{color:#86efac}
-pre{background:#18181b;border:1px solid #27272a;border-radius:10px;padding:12px;overflow-x:auto}
-code{font:13px/1.5 ui-monospace,'Cascadia Mono',Consolas,monospace}
-.body code:not(pre code){background:#18181b;padding:2px 6px;border-radius:5px}
-.foot{margin-top:34px;color:#52525b;font-size:12.5px;text-align:center}
-a{color:#60a5fa}
-</style></head><body><div class="wrap">
-<div class="badge">🔗 Shared chat · read-only</div>
-<h1>${escH(d.title)}</h1>
-<div class="sub">from <b>${escH(d.owner)}</b>'s Teman Tanyamu${d.model ? ' · ' + escH(d.model) : ''}</div>
-${msgs}
-<div class="foot">Dibagikan lewat <a href="/">Teman Tanyamu</a> · konten ini snapshot, tidak diperbarui otomatis</div>
-</div></body></html>`;
-}
+// public read-only share page -> renderer lives in lib/share.js (#11)
 app.get('/s/:token', (req, res) => {
+  const lang = acceptLang(req);
   const d = shareLookup(req.params.token);
   res.setHeader('Cache-Control', 'no-store');
-  if (!d) return res.status(404).type('html').send('<!DOCTYPE html><meta charset="utf-8"><title>Not found</title><body style="background:#09090b;color:#fafafa;font-family:sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h2>Link tidak ditemukan</h2><p style="color:#a1a1aa">Link ini sudah dicabut atau tidak pernah ada.</p></div></body>');
-  res.type('html').send(shareHTML(d));
+  if (!d) return res.status(404).type('html').send(notFoundHTML(lang));
+  res.type('html').send(shareHTML(d, lang));
+});
+
+// ---------- #7 audit trail view (admin) ----------
+app.get('/api/admin/audit', requireAuth, requireAdmin, (req, res) => {
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+  const offset = Math.min(1975, Math.max(0, Number(req.query.offset) || 0));
+  const rows = db.prepare('SELECT id, at, actor, action, target, detail FROM audit ORDER BY id DESC LIMIT ? OFFSET ?').all(limit, offset);
+  res.json({ rows });
+});
+
+// ---------- #10 metrics (admin, Prometheus text format) ----------
+app.get('/api/admin/metrics', requireAuth, requireAdmin, (req, res) => {
+  const up = db.prepare("SELECT COALESCE(SUM(request_count),0) reqs, COALESCE(SUM(tokens_used),0) tok FROM usage WHERE date >= date('now','-1 day')").get();
+  const all = db.prepare("SELECT COALESCE(SUM(request_count),0) reqs, COALESCE(SUM(tokens_used),0) tok FROM usage").get();
+  const counts = {
+    users: db.prepare('SELECT COUNT(*) n FROM users').get().n,
+    chats: db.prepare('SELECT COUNT(*) n FROM chats').get().n,
+    messages: db.prepare('SELECT COUNT(*) n FROM messages').get().n,
+    guests: db.prepare('SELECT COUNT(*) n FROM guest_sessions').get().n,
+    shares: db.prepare('SELECT COUNT(*) n FROM shared_chats').get().n,
+    audit: db.prepare('SELECT COUNT(*) n FROM audit').get().n,
+  };
+  const mem = process.memoryUsage();
+  res.type('text/plain').send([
+    '# HELP dashaim_uptime_seconds Process uptime',
+    '# TYPE dashaim_uptime_seconds gauge',
+    'dashaim_uptime_seconds ' + Math.round((Date.now() - startedAt) / 1000),
+    'dashaim_process_rss_bytes ' + mem.rss,
+    'dashaim_http_heap_bytes ' + mem.heapUsed,
+    'dashaim_requests_24h ' + up.reqs,
+    'dashaim_tokens_24h ' + up.tok,
+    'dashaim_requests_total ' + all.reqs,
+    'dashaim_tokens_total ' + all.tok,
+    ...Object.entries(counts).map(([k, v]) => 'dashaim_' + k + ' ' + v),
+    ''
+  ].join('\n'));
+});
+
+// ---------- #1 admin: DB backup on demand ----------
+app.post('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(BACKUP_DIR, 'chat-' + ts + '.db');
+    db.backup(file).then(() => {
+      pruneBackups();
+      audit(req.user, 'backup', path.basename(file));
+      logInfo('backup_done', { file: path.basename(file) });
+      res.json({ ok: true, file: path.basename(file) });
+    }).catch((e) => res.status(500).json({ error: 'ERR_BACKUP', msg: String(e.message || e) }));
+  } catch (e) {
+    res.status(500).json({ error: 'ERR_BACKUP', msg: String(e.message || e) });
+  }
 });
 
 // ---------- SPA fallback: unknown non-API GET -> index.html (client router decides) ----------
@@ -1437,21 +1511,51 @@ app.get('/{*splat}', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`dash_ai_me running on http://localhost:${PORT}`);
+  logInfo('server_start', { port: PORT, version: APP_VERSION });
+  setTimeout(runAutoBackup, 3000).unref();   // one backup per boot, then daily
+  setInterval(runAutoBackup, 24 * 3600 * 1000).unref();
 });
 
-// ---------- scheduled guest-chat purge (admin-configurable local time, default 00:00) ----------
-let lastPurgeDay = '';
+// ---------- #1 automatic backups (30 days retention, safe: better-sqlite3 online backup) ----------
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
+const KEEP_DAYS = Number(process.env.BACKUP_KEEP_DAYS || 30);
+function pruneBackups() {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const cutoff = Date.now() - KEEP_DAYS * 86400000;
+    let removed = 0;
+    for (const f of fs.readdirSync(BACKUP_DIR)) {
+      if (!/^chat-.*\.db$/.test(f)) continue;
+      const st = fs.statSync(path.join(BACKUP_DIR, f));
+      if (st.mtimeMs < cutoff) { fs.unlinkSync(path.join(BACKUP_DIR, f)); removed++; }
+    }
+    if (removed) logInfo('backups_pruned', { removed, keep_days: KEEP_DAYS });
+  } catch (e) { log('warn', 'backup_prune_failed', { msg: String(e.message || e) }); }
+}
+let lastBackupDay = '';
+function runAutoBackup() {
+  const key = new Date().toISOString().slice(0, 10);
+  if (lastBackupDay === key) { pruneBackups(); return; }
+  lastBackupDay = key;
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const file = path.join(BACKUP_DIR, 'chat-' + key + '.db');
+    db.backup(file).then(() => { pruneBackups(); logInfo('auto_backup', { file: path.basename(file) }); })
+      .catch((e) => log('error', 'auto_backup_failed', { msg: String(e.message || e) }));
+  } catch (e) { log('error', 'auto_backup_failed', { msg: String(e.message || e) }); }
+}
 
+// ---------- scheduled guest-chat purge (admin-configurable local time, default 00:00) ----------
 app.post('/api/admin/guest-purge-now', requireAuth, requireAdmin, (req, res) => {
-  const n = runGuestPurge();
+  const n = runGuestPurge(req.user, 'manual');
+  audit(req.user, 'guest_purge_manual', null, 'cleared=' + n);
   res.json({ ok: true, cleared: n });
 });
 function purgeHour() {
   const n = Number(getSetting('guest_purge_hour'));
   return Number.isFinite(n) ? Math.min(23, Math.max(0, Math.round(n))) : 0;
 }
-function runGuestPurge() {
+function runGuestPurge(actor, reason) {
   // wipe ALL guest data: expired or not — this is the scheduled cleanup
   const ids = db.prepare('SELECT DISTINCT guest_id FROM guest_sessions').all();
   const delMsgs = db.prepare('DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE user_id = ?)');
@@ -1462,16 +1566,19 @@ function runGuestPurge() {
     db.prepare('DELETE FROM guest_sessions').run();
   });
   tx();
-  console.log(`[guest-purge] cleared ${n} guest sessions`);
+  log('info', 'guest_purge', { cleared: n, via: reason || 'manual' });
+  if (reason === 'auto') setSetting('guest_last_purge_day', keyOf(now0()));
   return n;
 }
+function keyOf(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function now0() { return new Date(); }
 setInterval(() => {
   const now = new Date();
   if (now.getHours() !== purgeHour()) return;
-  const key = now.toDateString(); // fire once per calendar day
-  if (lastPurgeDay === key) return;
-  lastPurgeDay = key;
-  runGuestPurge();
+  const key = keyOf(now); // once per calendar day, persisted in settings (survives restarts)
+  if (getSetting('guest_last_purge_day') === key) return;
+  const n = runGuestPurge(null, 'auto');
+  audit(null, 'guest_purge_auto', null, 'cleared=' + n);
 }, 60000);
 
 // graceful shutdown: close DB cleanly on stop/restart

@@ -573,6 +573,17 @@ when the request arrives via HTTPS.
 
 ---
 
+### Night of Reliability (v1.0-beta.21)
+Fitur operasional level produksi:
+- **Backup otomatis**: tiap boot + harian ke `backups/` (retensi 30 hari), plus tombol "Back up database now" di panel **Sistem & Operasi** pada Admin Dashboard. CLI: `./manage.sh backup` / `restore <file>` / `vacuum`.
+- **Audit trail**: login, aksi admin, purge, share, rate-limit tercatat ke tabel `audit` (maks 2000 baris) dan tampil di panel Ops (paginated).
+- **Throttle generasi**: 30 panggilan AI / 90 detik per user (tamu: per IP) → `ERR_GEN_LIMITED`; pembuatan sesi tamu 12/menit/IP.
+- **Log terstruktur JSON** (`lib/logger.js`) + request log API + endpoint `/api/admin/metrics` (Prometheus text, admin-only).
+- **Purge-day persisten**: guard hari purge sekarang disimpan di `settings` (`guest_last_purge_day`), aman restart, pakai tanggal lokal.
+- **Regression suite permanen**: `test/e2e.test.js` — 39 assertion (auth, isolasi chat, share+XSS+i18n, guard admin, limiter unit, metrics, backup). Jalankan: `./manage.sh test` atau `npm test`.
+- **i18n bersama**: `public/i18n.js` dipakai browser DAN server (halaman share ikut bahasa `Accept-Language`).
+- **Versi konsisten**: `package.json` `1.0.0-beta.21` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+
 ## Changelog
 
 ### v1.0-beta (current)
