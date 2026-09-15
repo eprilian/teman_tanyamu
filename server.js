@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.21';
+const APP_VERSION = '1.0-beta.22';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -199,8 +199,15 @@ function requireAdmin(req, res, next) {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'ERR_ADMIN_ONLY' });
   next();
 }
-// ---------- #5: generation throttle — 30 AI calls / 90 s per user key (guest: per IP) ----------
-const chatLimiter = makeLimiter({ windowMs: 90000, max: 30 });
+// ---------- #5: generation throttle — configurable in Admin (default 30 calls / 90 s); guest: per IP ----------
+function genPolicy() {
+  let max = getSettingInt('gen_limit_max', 30);
+  if (!(max >= 5 && max <= 1000)) max = 30;
+  let win = getSettingInt('gen_limit_window_sec', 90);
+  if (!(win >= 10 && win <= 600)) win = 90;
+  return { max, windowMs: win * 1000 };
+}
+const chatLimiter = makeLimiter(genPolicy());
 function requireGenLimit(req, res, next) {
   const key = req.guest ? ('g:' + get_client_ip(req)) : ('u:' + req.user.id);
   if (!chatLimiter.allow(key)) {
@@ -1094,12 +1101,14 @@ app.get('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
     guest_max_chats: guestPolicy().max_chats,
     guest_max_minutes: guestPolicy().max_minutes,
     guest_purge_hour: purgeHour(),
+    gen_limit_max: genPolicy().max,
+    gen_limit_window_sec: Math.round(genPolicy().windowMs / 1000),
     today_usage: db.prepare('SELECT COALESCE(SUM(tokens_used),0) t, COALESCE(SUM(prompt_tokens),0) p, COALESCE(SUM(completion_tokens),0) c FROM usage WHERE date = ?').get(today())
   });
 });
 
 app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
-  const { default_model, history_token_budget, max_reply_tokens, memory_enabled, timeout_ms, guest_enabled, guest_max_chats, guest_max_minutes, guest_purge_hour } = req.body || {};
+  const { default_model, history_token_budget, max_reply_tokens, memory_enabled, timeout_ms, guest_enabled, guest_max_chats, guest_max_minutes, guest_purge_hour, gen_limit_max, gen_limit_window_sec } = req.body || {};
   if (default_model !== undefined) {
     if (!default_model || typeof default_model !== 'string') return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
     setSetting('default_model', default_model);
@@ -1136,8 +1145,19 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
     if (!Number.isInteger(n) || n < 0 || n > 23) return res.status(400).json({ error: 'ERR_BAD_PURGE_HOUR' });
     setSetting('guest_purge_hour', String(n));
   }
+  if (gen_limit_max !== undefined) {
+    const n = Number(gen_limit_max);
+    if (!Number.isInteger(n) || n < 5 || n > 1000) return res.status(400).json({ error: 'ERR_BAD_GEN_LIMIT' });
+    setSetting('gen_limit_max', String(n));
+  }
+  if (gen_limit_window_sec !== undefined) {
+    const n = Number(gen_limit_window_sec);
+    if (!Number.isInteger(n) || n < 10 || n > 600) return res.status(400).json({ error: 'ERR_BAD_GEN_LIMIT' });
+    setSetting('gen_limit_window_sec', String(n));
+  }
+  chatLimiter.setLimits(genPolicy()); // apply live, no restart needed
   audit(req.user, 'settings_update', null, Object.keys(req.body || {}).join(','));
-  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 1024), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes, guest_purge_hour: purgeHour() });
+  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 1024), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes, guest_purge_hour: purgeHour(), gen_limit_max: genPolicy().max, gen_limit_window_sec: Math.round(genPolicy().windowMs / 1000) });
 });
 
 // ---------- admin: usage statistics ----------

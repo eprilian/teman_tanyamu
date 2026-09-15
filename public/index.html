@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teman Tanyamu</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="stylesheet" href="/style.css?v=1.0-beta.21">
+<link rel="stylesheet" href="/style.css?v=1.0-beta.22">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hljs-css">
 <script src="/vendor/highlight.min.js" defer></script>
 </head>
@@ -237,7 +237,7 @@
     <h3 style="font-size:13.5px;" id="admin-token-title">Token Saver</h3>
     <p class="modal-sub" style="margin-bottom:8px;" id="admin-token-sub">Context budget & reply cap for all chats. Today: <span id="admin-today-usage">-</span></p>
     <button class="btn-ghost" id="admin-reset-usage" style="padding:5px 10px; font-size:11.5px; border-radius:7px; margin-bottom:10px;">Reset All Usage</button>
-    <div class="token-grid" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+    <div class="token-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px;">
       <div>
         <label for="set-hist-budget" id="lbl-hist-budget">History budget (tokens)</label>
         <input id="set-hist-budget" type="number" value="1600" min="200" max="32000" step="100">
@@ -249,6 +249,14 @@
       <div>
         <label for="set-timeout" id="lbl-timeout">Timeout (seconds)</label>
         <input id="set-timeout" type="number" value="120" min="30" max="600" step="10">
+      </div>
+      <div>
+        <label for="set-gen-max" id="lbl-gen-max">Anti-spam: max AI calls</label>
+        <input id="set-gen-max" type="number" value="30" min="5" max="1000" step="1">
+      </div>
+      <div>
+        <label for="set-gen-window" id="lbl-gen-window">…per window (seconds)</label>
+        <input id="set-gen-window" type="number" value="90" min="10" max="600" step="10">
       </div>
     </div>
     <div style="display:flex; gap:8px; margin-top:10px;">
@@ -422,7 +430,7 @@
 
 <div id="toast" role="status"></div>
 
-<script src="/i18n.js?v=1.0-beta.21"></script>
-<script src="/app.js?v=1.0-beta.21"></script>
+<script src="/i18n.js?v=1.0-beta.22"></script>
+<script src="/app.js?v=1.0-beta.22"></script>
 </body>
 </html>

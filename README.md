@@ -573,16 +573,19 @@ when the request arrives via HTTPS.
 
 ---
 
-### Night of Reliability (v1.0-beta.21)
+### Night of Reliability (v1.0-beta.21 → .22)
 Fitur operasional level produksi:
 - **Backup otomatis**: tiap boot + harian ke `backups/` (retensi 30 hari), plus tombol "Back up database now" di panel **Sistem & Operasi** pada Admin Dashboard. CLI: `./manage.sh backup` / `restore <file>` / `vacuum`.
 - **Audit trail**: login, aksi admin, purge, share, rate-limit tercatat ke tabel `audit` (maks 2000 baris) dan tampil di panel Ops (paginated).
-- **Throttle generasi**: 30 panggilan AI / 90 detik per user (tamu: per IP) → `ERR_GEN_LIMITED`; pembuatan sesi tamu 12/menit/IP.
+- **Throttle generasi**: default 30 panggilan AI / 90 detik per user (tamu: per IP) → `ERR_GEN_LIMITED`; pembuatan sesi tamu 12/menit/IP. **Bisa disetel live** di Admin → Token Saver: "Anti-spam: maks panggilan AI" (5–1000) + "…per rentang detik" (10–600), tersimpan di settings, langsung berlaku tanpa restart, tercatat di audit trail.
 - **Log terstruktur JSON** (`lib/logger.js`) + request log API + endpoint `/api/admin/metrics` (Prometheus text, admin-only).
 - **Purge-day persisten**: guard hari purge sekarang disimpan di `settings` (`guest_last_purge_day`), aman restart, pakai tanggal lokal.
-- **Regression suite permanen**: `test/e2e.test.js` — 39 assertion (auth, isolasi chat, share+XSS+i18n, guard admin, limiter unit, metrics, backup). Jalankan: `./manage.sh test` atau `npm test`.
+- **Regression suite permanen**: `test/e2e.test.js` — 43 assertion (auth, isolasi chat, share+XSS+i18n, guard admin, limiter unit, metrics, backup). Jalankan: `./manage.sh test` atau `npm test`.
 - **i18n bersama**: `public/i18n.js` dipakai browser DAN server (halaman share ikut bahasa `Accept-Language`).
-- **Versi konsisten**: `package.json` `1.0.0-beta.21` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+- **Throttle configurable (v1.0-beta.22)** — Admin → Token Saver gains "Anti-spam: max AI calls"
+  (5–1000) + "…per window (seconds)" (10–600); stored in settings, applied live without restart,
+  audit-tracked.
+- **Versi konsisten**: `package.json` `1.0.0-beta.22` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
 
 ## Changelog
 

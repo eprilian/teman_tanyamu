@@ -133,6 +133,8 @@ function applyI18N() {
     setT('#lbl-guest-enabled-sub', t('guest_enabled_sub'));
     setT('label[for="set-guest-chats"]', t('guest_max_chats_lbl'));
     setT('label[for="set-guest-minutes"]', t('guest_minutes_lbl'));
+    setT('label[for="set-gen-max"]', t('gen_max_lbl'));
+    setT('label[for="set-gen-window"]', t('gen_window_lbl'));
     setT('#guest-btn-label', t('guest_btn'));
     setT('#guest-save', t('router_save_btn'));
     setT('#token-reset', t('reset_btn'));
@@ -1886,6 +1888,8 @@ async function loadAdminPanel() {
   $('#set-hist-budget').value = settings.history_token_budget || 1600;
   $('#set-max-reply').value = settings.max_reply_tokens || 1024;
   $('#set-timeout').value = settings.timeout_ms || 120;
+  $('#set-gen-max').value = settings.gen_limit_max || 30;
+  $('#set-gen-window').value = settings.gen_limit_window_sec || 90;
   $('#set-memory-enabled').checked = !!settings.memory_enabled;
   $('#set-guest-enabled').checked = !!settings.guest_enabled;
   $('#set-guest-chats').value = settings.guest_max_chats || 10;
@@ -2040,7 +2044,9 @@ $('#token-save').addEventListener('click', async () => {
       history_token_budget: Number($('#set-hist-budget').value),
       max_reply_tokens: Number($('#set-max-reply').value),
       memory_enabled: $('#set-memory-enabled').checked,
-      timeout_ms: Number($('#set-timeout').value)
+      timeout_ms: Number($('#set-timeout').value),
+      gen_limit_max: Number($('#set-gen-max').value),
+      gen_limit_window_sec: Number($('#set-gen-window').value)
     })
   });
   const data = await r.json();
@@ -2262,6 +2268,8 @@ $('#token-reset').addEventListener('click', async () => {
     history_token_budget: 1600,
     max_reply_tokens: 1024,
     timeout_ms: 120,
+    gen_limit_max: 30,
+    gen_limit_window_sec: 90,
     memory_enabled: true
   };
   const r = await fetch('/api/admin/settings', {
@@ -2274,6 +2282,8 @@ $('#token-reset').addEventListener('click', async () => {
   $('#set-hist-budget').value = 1600;
   $('#set-max-reply').value = 1024;
   $('#set-timeout').value = 120;
+  $('#set-gen-max').value = 30;
+  $('#set-gen-window').value = 90;
   $('#set-memory-enabled').checked = true;
   toast(t('token_reset'), 'success');
 });
