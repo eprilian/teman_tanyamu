@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.30';
+const APP_VERSION = '1.0-beta.31';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -78,6 +78,7 @@ try { db.exec('ALTER TABLE chats ADD COLUMN summary TEXT'); } catch (_) {}
 try { db.exec('ALTER TABLE chats ADD COLUMN summary_upto_id INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE usage ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE usage ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE messages ADD COLUMN meta TEXT'); } catch (_) {}
 // per-request mode ledger (normal/eco/temp/guest) incl. model — usage table alone can't split modes
 db.exec(`CREATE TABLE IF NOT EXISTS usage_events (
   date TEXT NOT NULL, hour INTEGER NOT NULL, mode TEXT NOT NULL, model TEXT NOT NULL,
@@ -795,7 +796,7 @@ app.post('/api/chats', requireAuth, (req, res) => {
 app.get('/api/chats/:id', requireAuth, (req, res) => {
   const chat = db.prepare('SELECT * FROM chats WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!chat) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
-  res.json({ ...chat, messages: db.prepare('SELECT id, role, content, created_at FROM messages WHERE chat_id = ? ORDER BY id').all(chat.id) });
+  res.json({ ...chat, messages: db.prepare('SELECT id, role, content, created_at, meta FROM messages WHERE chat_id = ? ORDER BY id').all(chat.id) });
 });
 
 app.delete('/api/chats/:id', requireAuth, (req, res) => {
@@ -917,6 +918,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
 
   // --- token-saving context builder ---
   const HISTORY_BUDGET = getSettingInt('history_token_budget', 1600); // ~window lama, tapi berdasarkan token
+  const CONTEXT_WINDOW = getSettingInt('context_window', 8192); // jendela konteks model utk chip pemakaian
   const MAX_REPLY_TOKENS = getSettingInt('max_reply_tokens', 4096);  // cap output
   const lean = !!chat.lean;
   const history = lean ? [] : buildHistory(chat.id, chat.summary_upto_id || 0, HISTORY_BUDGET);
@@ -941,6 +943,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
   res.on('close', () => { if (!res.writableEnded) aborted = true; });
 
   let truncated = false;
+  const t0 = Date.now(); let tFirst = 0; // wall-clock stream + first-token latency
   const idle = idleSignal(getTimeoutMs());
   try {
     const upstream = await routerFetch('/chat/completions', {
@@ -975,6 +978,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
         if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
         try {
           const chunk = JSON.parse(line.slice(6));
+          if (!tFirst) tFirst = Date.now();
           if (chunk.choices?.[0]?.finish_reason === 'length') truncated = true;
           const delta = chunk.choices?.[0]?.delta;
           if (delta && delta.content) {
@@ -1001,7 +1005,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
     }
 
     if (aiReply) {
-      db.prepare('INSERT INTO messages (chat_id, role, content, tokens) VALUES (?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens);
+      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW }));
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chat.id);
       countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
       // background: refresh rolling summary + cross-chat memory (lean mode = no context, skip both)
@@ -1014,13 +1018,13 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
     }
     idle.done();
     if (truncated && aiReply) res.write(`data: ${JSON.stringify({ note: 'ERR_LENGTH' })}\n\n`);
-    res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW } })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
     idle.done();
     if (aiReply) {
-      db.prepare('INSERT INTO messages (chat_id, role, content, tokens) VALUES (?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens);
+      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW }));
       countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
     }
     const friendly = e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code
@@ -1081,7 +1085,9 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
 
   startSse(req, res);
 
-  let tokens = 0;
+  let tokens = 0; let promptTokens = 0; let completionTokens = 0;
+  const t0 = Date.now(); let tFirst = 0;
+  const CONTEXT_WINDOW = getSettingInt('context_window', 8192);
   let aiTempReply = '';
   let aborted = false;
   res.on('close', () => { if (!res.writableEnded) aborted = true; });
@@ -1125,6 +1131,7 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
         if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
         try {
           const chunk = JSON.parse(line.slice(6));
+          if (!tFirst) tFirst = Date.now();
           const delta = chunk.choices?.[0]?.delta;
           if (delta && delta.content) {
             aiTempReply = (aiTempReply || '') + delta.content;
@@ -1137,12 +1144,13 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
             }
             res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
           }
-          if (chunk.usage) tokens = (chunk.usage.total_tokens || tokens);
+          if (chunk.usage) { tokens = (chunk.usage.total_tokens || tokens); promptTokens = chunk.usage.prompt_tokens || promptTokens; completionTokens = chunk.usage.completion_tokens || completionTokens; }
         } catch (_) {}
       }
     }
     idle.done();
-    countRequest(req.user, tokens, 0, 0, req.guest ? 'guest' : (lean ? 'eco' : 'temp'), effectiveModel);
+    countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'temp'), effectiveModel);
+    res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW } })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
@@ -1170,6 +1178,7 @@ app.get('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
     default_model: getGlobalModel(),
     history_token_budget: getSettingInt('history_token_budget', 1600),
     max_reply_tokens: getSettingInt('max_reply_tokens', 4096),
+    context_window: getSettingInt('context_window', 8192),
     memory_enabled: getSetting('memory_enabled') !== '0',
     timeout_ms: getTimeoutMs() / 1000,
     guest_enabled: guestEnabled(),
@@ -1183,7 +1192,7 @@ app.get('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
 });
 
 app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
-  const { default_model, history_token_budget, max_reply_tokens, memory_enabled, timeout_ms, guest_enabled, guest_max_chats, guest_max_minutes, guest_purge_hour, gen_limit_max, gen_limit_window_sec } = req.body || {};
+  const { default_model, history_token_budget, max_reply_tokens, context_window, memory_enabled, timeout_ms, guest_enabled, guest_max_chats, guest_max_minutes, guest_purge_hour, gen_limit_max, gen_limit_window_sec } = req.body || {};
   if (default_model !== undefined) {
     if (!default_model || typeof default_model !== 'string') return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
     setSetting('default_model', default_model);
@@ -1197,6 +1206,11 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
     const n = Number(max_reply_tokens);
     if (!Number.isFinite(n) || n < 64 || n > 16384) return res.status(400).json({ error: 'ERR_BAD_MAXTOK' });
     setSetting('max_reply_tokens', String(Math.round(n)));
+  }
+  if (context_window !== undefined) {
+    const n = Number(context_window);
+    if (!Number.isFinite(n) || n < 1024 || n > 1048576) return res.status(400).json({ error: 'ERR_BAD_CTXWIN' });
+    setSetting('context_window', String(Math.round(n)));
   }
   if (memory_enabled !== undefined) setSetting('memory_enabled', memory_enabled ? '1' : '0');
   if (guest_enabled !== undefined) setSetting('guest_enabled', guest_enabled ? '1' : '0');
@@ -1232,7 +1246,7 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
   }
   chatLimiter.setLimits(genPolicy()); // apply live, no restart needed
   audit(req.user, 'settings_update', null, Object.keys(req.body || {}).join(','));
-  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 4096), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes, guest_purge_hour: purgeHour(), gen_limit_max: genPolicy().max, gen_limit_window_sec: Math.round(genPolicy().windowMs / 1000) });
+  res.json({ ok: true, default_model: getGlobalModel(), history_token_budget: getSettingInt('history_token_budget', 1600), max_reply_tokens: getSettingInt('max_reply_tokens', 4096), context_window: getSettingInt('context_window', 8192), memory_enabled: getSetting('memory_enabled') !== '0', timeout_ms: getTimeoutMs() / 1000, guest_enabled: guestEnabled(), guest_max_chats: guestPolicy().max_chats, guest_max_minutes: guestPolicy().max_minutes, guest_purge_hour: purgeHour(), gen_limit_max: genPolicy().max, gen_limit_window_sec: Math.round(genPolicy().windowMs / 1000) });
 });
 
 // ---------- admin: usage statistics ----------

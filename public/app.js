@@ -115,6 +115,7 @@ function applyI18N() {
     }
     setT('label[for="set-hist-budget"]', t('hist_budget'));
     setT('label[for="set-max-reply"]', t('max_reply'));
+    setT('label[for="set-ctx-win"]', t('ctx_window'));
     setT('label[for="set-timeout"]', t('timeout_lbl'));
     setT('#admin-ai-avatar-title', t('ai_avatar_title'));
     setT('#admin-ai-avatar-sub', t('ai_avatar_sub'));
@@ -201,6 +202,13 @@ const ICON_REFRESH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none
 const ICON_UPLOAD = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
 const ICON_TRASH = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
 const ICON_X = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+// meta footer icons (reply stats strip under each answer)
+const ICON_CLOCK = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+const ICON_BOLT = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2 13 2"/></svg>';
+const ICON_CTX = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 2a10 10 0 0 1 10 10h-10z"/></svg>';
+const ICON_DOWN = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>';
+const ICON_UP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+const ICON_TOTAL = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>';
 
 function toast(msg, type = '', ms = 4000) {
   const t = $('#toast');
@@ -1288,6 +1296,29 @@ async function openChat(id) {
 
 let lastRendered = [];
 let pendingNote = null; // {why, until} — stream note (e.g. ERR_LENGTH) must survive route re-render AND the silent refresh that races it
+function fmtTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k' : String(n); }
+// Open-WebUI-style meta footer: [{ic,label,val,tip}] chips rendered into .m-meta
+function metaChipsHTML(meta) {
+  const chips = [];
+  const ms = Number(meta.ms) || 0, comp = Number(meta.c) || 0;
+  const tt = Number(meta.tt) || 0;
+  if (ms > 0) chips.push({ ic: ICON_CLOCK, v: ms < 10000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms / 1000) + 's', tip: tt ? t('meta_tip_time', (ms / 1000).toFixed(1), (tt / 1000).toFixed(1)) : t('meta_gen') });
+  if (ms > 900 && comp > 0) chips.push({ ic: ICON_BOLT, v: (comp / (ms / 1000)).toFixed(1) + ' t/s', tip: t('meta_tip_rate') });
+  const ctx = Number(meta.ctx) || 0, prompt = Number(meta.p) || 0;
+  if (ctx > 0 && prompt > 0) chips.push({ ic: ICON_CTX, v: Math.round((prompt / ctx) * 100) + '%', tip: t('meta_tip_ctx', fmtTok(prompt), fmtTok(ctx)) });
+  if (prompt > 0) chips.push({ ic: ICON_DOWN, v: fmtTok(prompt), tip: t('meta_tip_prompt') });
+  if (comp > 0) chips.push({ ic: ICON_UP, v: fmtTok(comp), tip: t('meta_tip_completion') });
+  const tot = Number(meta.t) || 0;
+  if (tot > 0) chips.push({ ic: ICON_TOTAL, v: fmtTok(tot), tip: t('meta_tip_total') });
+  if (!chips.length) return '';
+  return `<div class="m-meta">${chips.map(c => `<span class="m-chip" title="${esc(c.tip)}">${c.ic}${esc(c.v)}</span>`).join('')}</div>`;
+}
+function parseMeta(m) {
+  if (!m) return null;
+  if (typeof m === 'string') { try { return JSON.parse(m); } catch (_) { return null; } }
+  return m;
+}
+
 function renderMessages(messages, quiet) {
   lastRendered = messages || [];
   const box = $('#messages');
@@ -1295,6 +1326,7 @@ function renderMessages(messages, quiet) {
   let lastUserId = null;
   const parts = lastRendered.map(m => {
     if (m.role === 'user') lastUserId = m.id;
+    if (m.meta) messageHTML._meta = parseMeta(m.meta);
     return messageHTML(m.role, m.content, false, m.id, lastUserId);
   });
   box.innerHTML = `<div class="msg-col${quiet ? ' no-anim' : ''}">${parts.join('')}</div>`;
@@ -1322,6 +1354,8 @@ function messageHTML(role, content, streaming, mid, prevUserId) {
   const userAva = isUser ? `<img src="${esc(userAvatarSrc(currentUser))}" alt="">` : initial;
   const aiAvatar = (!isUser && currentUser && currentUser.assistant_avatar) ? `<img src="${esc(currentUser.assistant_avatar)}" alt="">` : initial;
   const saved = !!mid; // temp-chat bubbles have no DB id -> no edit/truncate actions
+  const meta = !isUser && !streaming && messageHTML._meta ? metaChipsHTML(messageHTML._meta) : '';
+  messageHTML._meta = null;
   return `<div class="msg-block ${isUser ? 'user' : 'ai'}" ${saved ? `data-msg="${mid}"` : ''}>
     <div class="m-avatar">${isUser ? userAva : aiAvatar}</div>
     <div class="m-body">
@@ -1330,6 +1364,7 @@ function messageHTML(role, content, streaming, mid, prevUserId) {
       ${isUser && saved && !streaming ? `<div class="m-actions">
         <button data-edit="${mid}">${ICON_EDIT} ${esc(t('edit_msg'))}</button>
       </div>` : ''}
+      ${!isUser && !streaming ? meta : ''}
       ${!isUser && !streaming ? `<div class="m-actions">
         <button data-copy>${ICON_COPY} ${esc(t('copy'))}</button>
         <button data-regen="${prevUserId || ''}">${ICON_REFRESH} ${esc(t('regen'))}</button>
@@ -1499,6 +1534,7 @@ async function sendTemp(text) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let aiText = '';
+    let lastUsage = null;
     let buffer = '';
     const bubble = getStreamBubble(box);
     while (true) {
@@ -1513,12 +1549,22 @@ async function sendTemp(text) {
           const chunk = JSON.parse(line.slice(6));
           if (chunk.error) throw new Error(chunk.error);
           if (chunk.partial) { noteStreamInterrupt(bubble, chunk.partial); continue; }
+          if (chunk.usage) { lastUsage = chunk.usage; continue; }
           if (chunk.content) {
             aiText += chunk.content;
             bubble.innerHTML = renderMarkdown(aiText);
             box.scrollTop = box.scrollHeight;
           }
         } catch (e) { if (e.message && !e.message.includes('JSON')) throw e; }
+      }
+    }
+    if (lastUsage && bubble) {
+      const el = document.createElement('div');
+      el.innerHTML = metaChipsHTML(lastUsage);
+      const bodyEl = bubble.closest('.m-body');
+      if (bodyEl && !bodyEl.querySelector('.m-meta')) {
+        const acts = bodyEl.querySelector('.m-actions');
+        if (acts) acts.before(el); else bodyEl.appendChild(el);
       }
     }
   } catch (e) {
@@ -1634,12 +1680,13 @@ async function send() {
     }
     if (lastUsage && bubble) {
       bubble.classList.remove('stream-target');
-      const note = document.createElement('div');
-      note.className = 'm-usage';
-      note.textContent = t('usage_tooltip', lastUsage);
-      note.title = note.textContent;
+      const el = document.createElement('div');
+      el.innerHTML = metaChipsHTML(lastUsage);
       const bodyEl = bubble.closest('.m-body');
-      if (bodyEl) bodyEl.appendChild(note);
+      if (bodyEl && !bodyEl.querySelector('.m-meta')) {
+        const acts = bodyEl.querySelector('.m-actions');
+        if (acts) acts.before(el); else bodyEl.appendChild(el); // chips sit under the reply, above the action row
+      }
     }
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -1949,6 +1996,7 @@ async function loadAdminPanel() {
   enhanceModelSelects();
   $('#set-hist-budget').value = settings.history_token_budget || 1600;
   $('#set-max-reply').value = settings.max_reply_tokens || 4096;
+  $('#set-ctx-win').value = settings.context_window || 8192;
   $('#set-timeout').value = settings.timeout_ms || 120;
   $('#set-gen-max').value = settings.gen_limit_max || 30;
   $('#set-gen-window').value = settings.gen_limit_window_sec || 90;
@@ -2105,6 +2153,7 @@ $('#token-save').addEventListener('click', async () => {
     body: JSON.stringify({
       history_token_budget: Number($('#set-hist-budget').value),
       max_reply_tokens: Number($('#set-max-reply').value),
+      context_window: Number($('#set-ctx-win').value),
       memory_enabled: $('#set-memory-enabled').checked,
       timeout_ms: Number($('#set-timeout').value),
       gen_limit_max: Number($('#set-gen-max').value),
@@ -2363,6 +2412,7 @@ $('#token-reset').addEventListener('click', async () => {
   if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
   $('#set-hist-budget').value = 1600;
   $('#set-max-reply').value = 4096;
+  $('#set-ctx-win').value = 8192;
   $('#set-timeout').value = 120;
   $('#set-gen-max').value = 30;
   $('#set-gen-window').value = 90;

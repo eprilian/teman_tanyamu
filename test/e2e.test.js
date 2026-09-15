@@ -78,6 +78,7 @@ async function runSuite() {
   line('setup (DB users)');
   const crypto = require('crypto');
   const db = new Database(path.join(ROOT, 'chat.db'));
+  try { db.exec('ALTER TABLE messages ADD COLUMN meta TEXT'); } catch (_) {} // same migration server applies at boot
   const hash = (pw) => { const salt = crypto.randomBytes(16).toString('hex'); return 'scrypt1:' + salt + ':' + crypto.scryptSync(pw, salt, 64).toString('hex'); };
   for (const u of USERS) {
     db.prepare('DELETE FROM users WHERE username = ?').run(u);
@@ -100,6 +101,10 @@ async function runSuite() {
   const chatId = created.body.id;
   ok('create chat', created.status === 200 && chatId > 0, JSON.stringify(created.body).slice(0, 120));
   db.prepare('INSERT INTO messages (chat_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(chatId, 'user', 'hello from suite', new Date().toISOString());
+  // meta footer (v31): token/timing stats persist on the message row and ride along chat GET
+  db.prepare('UPDATE messages SET meta = ? WHERE chat_id = ? AND role = ?').run('{"p":10,"c":5,"t":15,"ms":1200,"tt":300,"ctx":8192}', chatId, 'user');
+  const withMeta = await j('/api/chats/' + chatId, {}, ckA);
+  ok('message meta round-trip', withMeta.status === 200 && withMeta.body.messages.some((m) => m.meta && m.meta.includes('\"ctx\"')), JSON.stringify((withMeta.body.messages || []).map((m) => m.meta)));
   const listB = await j('/api/chats', {}, ckB);
   ok('chat isolation (B cannot see A chat)', !(listB.body.chats || listB.body || []).some((c) => c.id === chatId));
 
@@ -187,6 +192,15 @@ async function runSuite() {
   ok('gen limit bounds rejected', badG.status === 400 && badG.body.error === 'ERR_BAD_GEN_LIMIT');
   const backG = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ gen_limit_max: origG.max, gen_limit_window_sec: origG.win }) }, ckA);
   ok('gen limit restored to admin value', backG.status === 200 && backG.body.gen_limit_max === origG.max && backG.body.gen_limit_window_sec === origG.win, JSON.stringify({ want: origG, got: { m: backG.body.gen_limit_max, w: backG.body.gen_limit_window_sec } }));
+
+  // context window setting (v31): exposed, round-trips, bounds enforced
+  const cwBad = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ context_window: 10 }) }, ckA);
+  ok('context window bounds rejected', cwBad.status === 400 && cwBad.body.error === 'ERR_BAD_CTXWIN');
+  const cwGet = await j('/api/admin/settings', {}, ckA);
+  const cwOrig = cwGet.body.context_window;
+  const cwSet = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ context_window: 16384 }) }, ckA);
+  const cwBack = await j('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ context_window: cwOrig }) }, ckA);
+  ok('context window round-trip', cwSet.status === 200 && cwBack.body.context_window === cwOrig, JSON.stringify({ orig: cwOrig }));
 
   // ---------- guest ----------
   line('guest');

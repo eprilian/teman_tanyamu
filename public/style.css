@@ -523,6 +523,13 @@ body.light .stat-card.c-pink { border-left-color: #db2777; } body.light .stat-ca
 .m-actions { display: flex; gap: 2px; margin-top: 5px; opacity: 0; transition: opacity 120ms; }
 .msg-block:hover .m-actions { opacity: 1; }
 .m-usage { font-size: 10.5px; color: var(--text-3, #71717a); margin-top: 4px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+/* meta chip strip (reply stats: time, tok/s, context %, prompt/out/total) */
+.m-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.m-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; line-height: 1; padding: 4px 7px;
+  border-radius: 7px; background: var(--elev); color: var(--text-3); border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums; cursor: default; }
+.m-chip svg { opacity: 0.7; flex: 0 0 auto; }
+.m-chip:hover { color: var(--text-2); border-color: var(--text-3); }
 .lean-dot { font-size: 13px; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 2px; border-bottom: 1px solid var(--border); }
 .setting-row:last-child { border-bottom: none; }
