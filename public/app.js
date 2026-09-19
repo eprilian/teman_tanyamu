@@ -2966,8 +2966,15 @@ console.log('[TT] app v1.0-beta.6 fresh-load');
   try { enhanceModelSelects(); } catch(e) { console.warn('combo boot:', e); }
   try { applyTempUI(); } catch(e) { console.warn('temp boot:', e); }
 
-  if (user) { await enterApp(); try { routeFromURL(); } catch (e) { console.warn('boot route:', e); } }
-  else refreshGuestButton();
+  if (user) {
+    await enterApp();
+    if (currentUser && currentUser.role === 'admin') {
+      loadAdminPanel().catch(() => {});
+    }
+    try { routeFromURL(); } catch (e) { console.warn('boot route:', e); }
+  } else {
+    refreshGuestButton();
+  }
 })();
 
 // fallback: jangan pernah blank screen
