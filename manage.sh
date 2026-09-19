@@ -7,7 +7,7 @@
 # ============================================================
 set -euo pipefail
 
-APP_NAME="dash-ai-me"
+APP_NAME="teman-tanyamu"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_FILE="$HOME/.config/systemd/user/${APP_NAME}.service"
 PORT_FILE="$APP_DIR/.port"
