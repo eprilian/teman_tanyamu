@@ -2052,8 +2052,13 @@ setInterval(() => {
 }, ADMIN_POLL_MS);
 
 async function loadAdminPanel() {
-  if (!allModelsCache.length) {
-    allModelsCache = await (await fetch('/api/models')).json();
+  try {
+    if (!allModelsCache.length) {
+      const r = await fetch('/api/models');
+      if (r.ok) allModelsCache = await r.json();
+    }
+  } catch (e) {
+    console.warn('[TT] loadAdminPanel - models fetch delayed/failed:', e);
   }
   const settings = await (await fetch('/api/admin/settings')).json();
   const gmSel = $('#global-model-select');
