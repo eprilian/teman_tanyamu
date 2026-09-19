@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.34';
+const APP_VERSION = '1.0-beta.36';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -744,7 +744,8 @@ app.get('/api/me', requireAuth, (req, res) => {
     model_override: req.user.model_override,
     global_model: getGlobalModel(),
     avatar: req.user.avatar || null,
-    assistant_avatar: getSetting('assistant_avatar') || null
+    assistant_avatar: getSetting('assistant_avatar') || null,
+    history_token_budget: getSettingInt('history_token_budget', 1600)
   });
 });
 

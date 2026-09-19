@@ -1511,9 +1511,10 @@ function updateTokenEstimate() {
   const text = inputMsg.value || '';
   const estTokens = Math.ceil(text.length / 3);
   
-  // Ambil budget aktif dari data chat (atau fallback ke 1600)
+  // Ambil budget aktif dari data chat (atau fallback ke pengaturan user dari server)
   const activeChat = chats.find(c => c.id === currentChatId);
-  const budget = (activeChat && activeChat.lean) ? 0 : 1600; // Lean mode = no history budget
+  const userBudget = (currentUser && currentUser.history_token_budget) ? Number(currentUser.history_token_budget) : 1600;
+  const budget = (activeChat && activeChat.lean) ? 0 : userBudget; // Lean mode = no history budget
   const maxLabel = budget === 0 ? 'Eco (0)' : fmtTok(budget);
   
   const el = $('#token-estimator');
@@ -2226,6 +2227,10 @@ $('#token-save').addEventListener('click', async () => {
   });
   const data = await r.json();
   if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
+  if (currentUser && data.history_token_budget) {
+    currentUser.history_token_budget = data.history_token_budget;
+    updateTokenEstimate();
+  }
   toast(t('token_saved'), 'success');
 });
 
@@ -2474,6 +2479,10 @@ $('#token-reset').addEventListener('click', async () => {
   });
   const data = await r.json();
   if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
+  if (currentUser) {
+    currentUser.history_token_budget = 1600;
+    updateTokenEstimate();
+  }
   $('#set-hist-budget').value = 1600;
   $('#set-max-reply').value = 4096;
   $('#set-ctx-win').value = 8192;
