@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teman Tanyamu</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="stylesheet" href="/style.css?v=1.0-beta.33">
+<link rel="stylesheet" href="/style.css?v=1.0-beta.34">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hljs-css">
 <script src="/vendor/highlight.min.js" defer></script>
 </head>
@@ -108,13 +108,26 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
         <span id="temp-label" class="temp-label-text">Temp</span>
       </button>
+      
+      <div class="export-dropdown-wrap" style="position:relative; margin-left:6px;">
+        <button class="temp-btn" id="btn-export-chat" title="Export Chat" aria-label="Export chat">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span class="temp-label-text">Export</span>
+        </button>
+        <div class="export-popover" id="export-popover" style="display:none; position:absolute; right:0; top:calc(100% + 6px); background:var(--panel); border:1px solid var(--border); border-radius:8px; box-shadow:0 4px 12px var(--shadow); z-index:100; min-width:140px; padding:6px 0;">
+          <button class="ep-item" data-format="md" style="width:100%; text-align:left; background:none; border:none; padding:8px 12px; font-size:12px; color:var(--text-1); cursor:pointer; display:flex; align-items:center; gap:8px;">📝 Markdown (.md)</button>
+          <button class="ep-item" data-format="pdf" style="width:100%; text-align:left; background:none; border:none; padding:8px 12px; font-size:12px; color:var(--text-1); cursor:pointer; display:flex; align-items:center; gap:8px;">🖨️ PDF Print</button>
+          <button class="ep-item" data-format="json" style="width:100%; text-align:left; background:none; border:none; padding:8px 12px; font-size:12px; color:var(--text-1); cursor:pointer; display:flex; align-items:center; gap:8px;">💾 Raw JSON (.json)</button>
+        </div>
+      </div>
     </div>
 
     <div id="messages"></div>
 
     <div class="composer-wrap">
-      <div class="composer">
-        <textarea id="input-msg" rows="1" placeholder="Send a message..."></textarea>
+      <div class="composer" style="position:relative;">
+        <textarea id="input-msg" rows="1" placeholder="Send a message..." style="padding-right:110px;"></textarea>
+        <div id="token-estimator" style="position:absolute; right:46px; bottom:12px; font-size:10px; color:var(--text-3); font-family:monospace; pointer-events:none; transition:color 120ms;">~0 / 1.6k</div>
         <button id="btn-send" aria-label="Send message">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9 22 2z"/></svg>
         </button>
@@ -438,7 +451,7 @@
 
 <div id="toast" role="status"></div>
 
-<script src="/i18n.js?v=1.0-beta.33"></script>
-<script src="/app.js?v=1.0-beta.33"></script>
+<script src="/i18n.js?v=1.0-beta.34"></script>
+<script src="/app.js?v=1.0-beta.34"></script>
 </body>
 </html>

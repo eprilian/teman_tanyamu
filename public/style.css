@@ -952,3 +952,31 @@ body { transition: background-color 180ms ease, color 180ms ease; }
 
 /* quiet re-render (silent server-truth refresh): skip bubble entrance anim */
 .msg-col.no-anim .msg-block { animation: none; }
+
+/* ---------- PDF print optimization ---------- */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .sidebar, #sidebar-backdrop, .chat-header, .composer-wrap, .composer-hint, .m-actions, .del {
+    display: none !important;
+  }
+  .main {
+    margin-left: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+  #messages {
+    height: auto !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+  .msg-block {
+    page-break-inside: avoid;
+    border-bottom: 1px solid #e2e8f0 !important;
+    padding: 16px 0 !important;
+  }
+}

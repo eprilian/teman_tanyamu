@@ -906,13 +906,17 @@ $('#model-select').addEventListener('change', async (e) => {
 let showArchived = false;
 const ICON_DOTS = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
 function chatItemHTML(c) {
+  const snippet = c.match_snippet ? `<div class="chat-snippet" style="font-size:10.5px; color:var(--text-3); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px;">${esc(c.match_snippet)}</div>` : '';
   return `
-    <div class="chat-item ${c.id === currentChatId ? 'active' : ''} ${c.pinned ? 'pinned' : ''}" data-id="${c.id}" role="button" tabindex="0">
-      <span class="ico">${c.lean ? '<span class="lean-dot" title="' + esc(t('lean_badge')) + '">⚡</span>' : ICON_CHAT}</span>
-      <span class="title">${c.pinned ? '<span class="pin-mark"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4l6 6-3.5 1-3.5 5-2-2-5 3.5L3 22l1-1 1-1 4.5-3.5-2-2 5-3.5L16 7z"/></svg></span>' : ''}${esc(c.title)}${c.shared ? '<span class="share-mark" title="' + esc(t('unshare_chat')) + '">🔗</span>' : ''}${c.tag ? ' <span class="chat-tag">#' + esc(c.tag) + '</span>' : ''}</span>
-      <button class="del" data-menu="${c.id}" aria-label="…" title="…">${ICON_DOTS}</button>
-      <button class="del" data-rename="${c.id}" aria-label="${esc(t('rename_chat'))} ${esc(c.title)}" title="${esc(t('rename_chat'))}">✎</button>
-      <button class="del" data-del="${c.id}" aria-label="${esc(t('del_chat'))} ${esc(c.title)}" title="${esc(t('del_chat'))}">✕</button>
+    <div class="chat-item ${c.id === currentChatId ? 'active' : ''} ${c.pinned ? 'pinned' : ''}" data-id="${c.id}" role="button" tabindex="0" style="${c.match_snippet ? 'height:auto; min-height:44px; padding:6px 8px; display:flex; flex-direction:column; align-items:flex-start;' : ''}">
+      <div style="display:flex; align-items:center; width:100%; position:relative;">
+        <span class="ico">${c.lean ? '<span class="lean-dot" title="' + esc(t('lean_badge')) + '">⚡</span>' : ICON_CHAT}</span>
+        <span class="title" style="flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:60px;">${c.pinned ? '<span class="pin-mark"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4l6 6-3.5 1-3.5 5-2-2-5 3.5L3 22l1-1 1-1 4.5-3.5-2-2 5-3.5L16 7z"/></svg></span>' : ''}${esc(c.title)}${c.shared ? '<span class="share-mark" title="' + esc(t('unshare_chat')) + '">🔗</span>' : ''}${c.tag ? ' <span class="chat-tag">#' + esc(c.tag) + '</span>' : ''}</span>
+        <button class="del" data-menu="${c.id}" aria-label="…" title="…" style="position:absolute; right:42px;">${ICON_DOTS}</button>
+        <button class="del" data-rename="${c.id}" aria-label="${esc(t('rename_chat'))} ${esc(c.title)}" title="${esc(t('rename_chat'))}" style="position:absolute; right:20px;">✎</button>
+        <button class="del" data-del="${c.id}" aria-label="${esc(t('del_chat'))} ${esc(c.title)}" title="${esc(t('del_chat'))}" style="position:absolute; right:0px;">✕</button>
+      </div>
+      ${snippet}
     </div>`;
 }
 let chatMenuEl = null;
@@ -1016,14 +1020,39 @@ async function loadChats() {
   list.innerHTML = html;
 }
 
-// ---------- chat search filter ----------
+// ---------- chat search filter (Global Server-Side Search with Debounce) ----------
+let searchDebounceTimer = null;
 $('#chat-search').addEventListener('input', () => {
-  const q = $('#chat-search').value.trim().toLowerCase();
-  document.querySelectorAll('#chat-list .chat-item').forEach(el => {
-    const title = el.querySelector('.title');
-    el.style.display = (!q || (title && title.textContent.toLowerCase().includes(q))) ? '' : 'none';
-  });
+  clearTimeout(searchDebounceTimer);
+  const q = $('#chat-search').value.trim();
+  searchDebounceTimer = setTimeout(async () => {
+    if (q) {
+      const r = await fetch('/api/chats?q=' + encodeURIComponent(q));
+      if (r.ok) {
+        const results = await r.json();
+        renderFilteredChats(results);
+      }
+    } else {
+      await loadChats();
+    }
+  }, 250);
 });
+
+function renderFilteredChats(results) {
+  const list = $('#chat-list');
+  if (!results.length) {
+    list.innerHTML = '<div class="chat-empty-hint" style="padding:10px 8px; font-size:12.5px; color:var(--text-3);">' + t('chat_empty') + '</div>';
+    return;
+  }
+  const live = results.filter(c => !c.archived);
+  const arch = results.filter(c => c.archived);
+  let html = live.map(chatItemHTML).join('');
+  if (arch.length) {
+    html += `<div class="side-section arch-toggle" id="arch-toggle" role="button" tabindex="0">${esc(t('archived_section'))} (${arch.length})</div>`;
+    if (showArchived) html += arch.map(chatItemHTML).join('');
+  }
+  list.innerHTML = html;
+}
 
 $('#chat-list').addEventListener('click', async (e) => {
   const ren = e.target.closest('[data-rename]');
@@ -1289,6 +1318,7 @@ async function openChat(id) {
   document.title = (row ? row.title : chat.title || 'Chat') + ' · Teman Tanyamu';
   chatLean = !!(row && row.lean);
   applyLeanUI();
+  updateTokenEstimate();
   renderMessages(chat.messages);
   await loadChats();
   closeMobileSidebar();
@@ -1475,9 +1505,40 @@ const btnSend = $('#btn-send');
 inputMsg.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
+// Token Estimator: Hitung taksiran token (rata-rata 1 token = 3 karakter bahasa Indonesia)
+// dan sesuaikan budget dari pengaturan pengguna (history_token_budget, default 1600)
+function updateTokenEstimate() {
+  const text = inputMsg.value || '';
+  const estTokens = Math.ceil(text.length / 3);
+  
+  // Ambil budget aktif dari data chat (atau fallback ke 1600)
+  const activeChat = chats.find(c => c.id === currentChatId);
+  const budget = (activeChat && activeChat.lean) ? 0 : 1600; // Lean mode = no history budget
+  const maxLabel = budget === 0 ? 'Eco (0)' : fmtTok(budget);
+  
+  const el = $('#token-estimator');
+  if (!el) return;
+  
+  el.textContent = `~${estTokens} / ${maxLabel} tok`;
+  
+  // Ubah warna cerdas jika melampaui batas anggaran
+  if (budget > 0) {
+    if (estTokens > budget) {
+      el.style.color = '#ef4444'; // merah (over budget)
+    } else if (estTokens > budget * 0.8) {
+      el.style.color = '#f59e0b'; // kuning (warning)
+    } else {
+      el.style.color = 'var(--text-3)'; // default redup
+    }
+  } else {
+    el.style.color = 'var(--text-3)';
+  }
+}
+
 inputMsg.addEventListener('input', () => {
   inputMsg.style.height = 'auto';
   inputMsg.style.height = Math.min(inputMsg.scrollHeight, 170) + 'px';
+  updateTokenEstimate();
 });
 
 
@@ -1517,6 +1578,7 @@ async function sendTemp(text) {
 
   inputMsg.value = '';
   inputMsg.style.height = 'auto';
+  updateTokenEstimate();
   abortCtrl = new AbortController();
 
   try {
@@ -1631,6 +1693,7 @@ async function send() {
 
   inputMsg.value = '';
   inputMsg.style.height = 'auto';
+  updateTokenEstimate();
   abortCtrl = new AbortController();
 
   try {
@@ -2804,8 +2867,67 @@ document.addEventListener('keydown', (e) => {
     if (location.pathname === '/account' || location.pathname === '/admin') goReplace('/');
     closeModelCombo();
     closeChatMenu();
+    $('#export-popover').style.display = 'none';
   }
 });
+
+// ---------- chat exporter handler ----------
+const btnExport = $('#btn-export-chat');
+const epPopover = $('#export-popover');
+if (btnExport) {
+  btnExport.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const visible = epPopover.style.display === 'block';
+    epPopover.style.display = visible ? 'none' : 'block';
+  });
+  
+  document.addEventListener('click', () => {
+    epPopover.style.display = 'none';
+  });
+
+  epPopover.addEventListener('click', (e) => {
+    const btn = e.target.closest('.ep-item');
+    if (!btn) return;
+    const format = btn.dataset.format;
+    const activeChat = chats.find(c => c.id === currentChatId) || { title: 'Untitled Chat', model: 'default' };
+    
+    if (format === 'json') {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(lastRendered, null, 2));
+      const dl = document.createElement('a');
+      dl.setAttribute("href", dataStr);
+      dl.setAttribute("download", `${activeChat.title.toLowerCase().replace(/\s+/g, '-')}.json`);
+      document.body.appendChild(dl);
+      dl.click();
+      dl.remove();
+      toast('Chat exported to JSON ✓', 'success');
+    } else if (format === 'md') {
+      let md = `---
+title: "${activeChat.title}"
+model: "${activeChat.model}"
+date: "${new Date().toISOString()}"
+app: "Teman Tanyamu"
+---
+
+# ${activeChat.title}
+
+`;
+      lastRendered.forEach(m => {
+        md += `## ${m.role === 'user' ? 'USER' : 'AI'}\n\n${m.content}\n\n---\n\n`;
+      });
+      
+      const dl = document.createElement('a');
+      dl.setAttribute("href", "data:text/markdown;charset=utf-8," + encodeURIComponent(md));
+      dl.setAttribute("download", `${activeChat.title.toLowerCase().replace(/\s+/g, '-')}.md`);
+      document.body.appendChild(dl);
+      dl.click();
+      dl.remove();
+      toast('Chat exported to Markdown ✓', 'success');
+    } else if (format === 'pdf') {
+      // PDF Print: Memicu dialog cetak bawaan browser yang di-clean oleh CSS media print
+      window.print();
+    }
+  });
+}
 
 // ---------- global error trap (debug) ----------
 window.addEventListener('error', (e) => {

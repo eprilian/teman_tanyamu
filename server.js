@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.33';
+const APP_VERSION = '1.0-beta.34';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -783,6 +783,23 @@ app.delete('/api/me/model', requireAuth, requireRegistered, requireAdmin, (req, 
 
 // ---------- chats ----------
 app.get('/api/chats', requireAuth, (req, res) => {
+  const q = req.query.q ? String(req.query.q).trim() : '';
+  if (q) {
+    // Pencarian Teks Global: Ambil chat yang cocok judulnya ATAU isi pesonanya mengandung keyword
+    // Kita return juga snippet pencocokan pesan pertama yang ketemu agar keren di UI!
+    const query = `
+      SELECT DISTINCT c.id, c.title, c.model, c.updated_at, c.lean, c.pinned, c.archived, c.tag,
+        (c.summary IS NOT NULL AND c.summary != '') AS has_summary,
+        (EXISTS (SELECT 1 FROM shared_chats sc WHERE sc.chat_id = c.id)) AS shared,
+        (SELECT m.content FROM messages m WHERE m.chat_id = c.id AND m.content LIKE ? LIMIT 1) AS match_snippet
+      FROM chats c
+      LEFT JOIN messages m ON m.chat_id = c.id
+      WHERE c.user_id = ? AND (c.title LIKE ? OR m.content LIKE ?)
+      ORDER BY c.pinned DESC, c.updated_at DESC
+    `;
+    const wildcard = '%' + q + '%';
+    return res.json(db.prepare(query).all(wildcard, req.user.id, wildcard, wildcard));
+  }
   res.json(db.prepare('SELECT id, title, model, updated_at, lean, pinned, archived, tag, (summary IS NOT NULL AND summary != \'\') AS has_summary, (EXISTS (SELECT 1 FROM shared_chats sc WHERE sc.chat_id = chats.id)) AS shared FROM chats WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC').all(req.user.id));
 });
 
