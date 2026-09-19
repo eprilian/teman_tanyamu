@@ -117,6 +117,9 @@ try { db.exec('ALTER TABLE guest_sessions ADD COLUMN started_at INTEGER NOT NULL
 try { db.exec('ALTER TABLE chats ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE chats ADD COLUMN tag TEXT'); } catch (_) {}
+// CSRF token column migrations
+try { db.exec('ALTER TABLE sessions ADD COLUMN csrf_token TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE guest_sessions ADD COLUMN csrf_token TEXT'); } catch (_) {}
 
 // seed admin
 if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
@@ -128,7 +131,64 @@ if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
 
 const app = express();
 app.set('trust proxy', true); // behind Cloudflare Tunnel / reverse proxy
+
+// --- Dual-Mode Security Suite (CORS & CSRF Guard) ---
+const ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'https://tanya.frmnspace.my.id'
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+// Middleware verifikasi CSRF Token untuk request mutasi data (POST, PUT, PATCH, DELETE)
+function csrfGuard(req, res, next) {
+  // Abaikan request GET, HEAD, OPTIONS
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  if (req.path === '/api/login' || req.path === '/api/guest') return next(); // Skip rute pembentukan session awal
+
+  let dbToken = null;
+  const sessionCookie = (req.headers.cookie || '').match(/session=([a-f0-9]+)/);
+  if (sessionCookie) {
+    const row = db.prepare('SELECT csrf_token FROM sessions WHERE token = ?').get(sessionCookie[1]);
+    dbToken = row ? row.csrf_token : null;
+  } else {
+    const gtokenCookie = (req.headers.cookie || '').match(/gtoken=([a-f0-9]+)/);
+    if (gtokenCookie) {
+      const row = db.prepare('SELECT csrf_token FROM guest_sessions WHERE token = ?').get(gtokenCookie[1]);
+      dbToken = row ? row.csrf_token : null;
+    }
+  }
+
+  const clientToken = req.headers['x-csrf-token'];
+  if (dbToken && clientToken === dbToken) {
+    return next();
+  }
+
+  // Fallback: Jika diakses murni dari localhost tanpa domain luar, kita bisa toleransi agar testing tidak terhambat
+  const isLocalHost = req.hostname === 'localhost' || req.hostname === '127.0.0.1';
+  if (isLocalHost && !clientToken) {
+    return next(); // Toleransi dev mode murni localhost tanpa client token
+  }
+
+  log('warn', 'csrf_blocked', { path: req.path, m: req.method, ip: req.ip });
+  return res.status(403).json({ error: 'ERR_CSRF_INVALID' });
+}
+
 app.use(express.json({ limit: '2mb' }));
+app.use(csrfGuard);
 // #10: structured request log (API calls only, static assets skipped)
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) {
@@ -654,12 +714,13 @@ app.post('/api/login', (req, res) => {
   maybeUpgradeHash(user.id, password, user.password_hash);
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now()); // purge expired sessions
   const token = crypto.randomBytes(32).toString('hex');
+  const csrfToken = crypto.randomBytes(16).toString('hex');
   const expires = Date.now() + SESSION_DAYS * 86400e3;
-  db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, user.id, expires);
+  db.prepare('INSERT INTO sessions (token, user_id, expires_at, csrf_token) VALUES (?, ?, ?, ?)').run(token, user.id, expires, csrfToken);
   const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.secure;
   const cookieFlags = `session=${token}; HttpOnly; Path=/; Max-Age=${SESSION_DAYS * 86400}; SameSite=Lax${isHttps ? '; Secure' : ''}`;
   res.setHeader('Set-Cookie', cookieFlags);
-  res.json({ ok: true, role: user.role, username: user.username });
+  res.json({ ok: true, role: user.role, username: user.username, csrf_token: csrfToken });
 });
 
 // Guest sign-in: create/reuse guest session. No credentials; rate-limited by same IP guard as login.
@@ -678,20 +739,30 @@ app.post('/api/guest', (req, res) => {
     row = null;
     const gid = db.prepare('SELECT COALESCE(MAX(guest_id), 0) m FROM guest_sessions').get().m + 1;
     const t2 = crypto.randomBytes(32).toString('hex');
+    const csrfToken = crypto.randomBytes(16).toString('hex');
     const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.secure;
     const secure = isHttps ? '; Secure' : '';
-    db.prepare('INSERT INTO guest_sessions (token, guest_id, msgs_used, started_at, expires_at) VALUES (?,?,?,?,?)')
-      .run(t2, gid, 0, now, now + 86400e3);
+    db.prepare('INSERT INTO guest_sessions (token, guest_id, msgs_used, started_at, expires_at, csrf_token) VALUES (?,?,?,?,?,?)')
+      .run(t2, gid, 0, now, now + 86400e3, csrfToken);
     res.setHeader('Set-Cookie', `gtoken=${t2}; HttpOnly; Path=/; Max-Age=86400; SameSite=Lax${secure}`);
-    row = { guest_id: gid, msgs_used: 0, started_at: now, expires_at: now + 86400e3 };
+    row = { guest_id: gid, msgs_used: 0, started_at: now, expires_at: now + 86400e3, csrf_token: csrfToken };
   }
   const pol = guestPolicy();
   const elapsed = Math.floor((Date.now() - row.started_at) / 1000);
+  
+  // Baca csrf_token dari database jika session-nya re-used
+  let csrfToken = row.csrf_token;
+  if (!csrfToken && t2) {
+    const sRow = db.prepare('SELECT csrf_token FROM guest_sessions WHERE token = ?').get(t2);
+    csrfToken = sRow ? sRow.csrf_token : null;
+  }
+
   res.json({
     ok: true, guest: true,
     msgs_left: Math.max(0, pol.max_chats - row.msgs_used),
     seconds_left: Math.max(0, pol.max_minutes * 60 - elapsed),
-    max_chats: pol.max_chats
+    max_chats: pol.max_chats,
+    csrf_token: csrfToken
   });
 });
 
@@ -714,7 +785,11 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/me', requireAuth, (req, res) => {
+  let csrfToken = null;
   if (req.guest) {
+    const gtoken = readCookie(req, 'gtoken');
+    const sRow = db.prepare('SELECT csrf_token FROM guest_sessions WHERE token = ?').get(gtoken);
+    csrfToken = sRow ? sRow.csrf_token : null;
     return res.json({
       id: req.user.id,
       username: 'Guest',
@@ -729,8 +804,14 @@ app.get('/api/me', requireAuth, (req, res) => {
       model_override: null,
       global_model: getGlobalModel(),
       avatar: null,
-      assistant_avatar: getSetting('assistant_avatar') || null
+      assistant_avatar: getSetting('assistant_avatar') || null,
+      csrf_token: csrfToken
     });
+  }
+  const sessionCookie = (req.headers.cookie || '').match(/session=([a-f0-9]+)/);
+  if (sessionCookie) {
+    const sRow = db.prepare('SELECT csrf_token FROM sessions WHERE token = ?').get(sessionCookie[1]);
+    csrfToken = sRow ? sRow.csrf_token : null;
   }
   const q = checkQuota(req.user);
   const usedRow = db.prepare('SELECT request_count FROM usage WHERE user_id = ? AND date = ?').get(req.user.id, today());
@@ -745,7 +826,8 @@ app.get('/api/me', requireAuth, (req, res) => {
     global_model: getGlobalModel(),
     avatar: req.user.avatar || null,
     assistant_avatar: getSetting('assistant_avatar') || null,
-    history_token_budget: getSettingInt('history_token_budget', 1600)
+    history_token_budget: getSettingInt('history_token_budget', 1600),
+    csrf_token: csrfToken
   });
 });
 

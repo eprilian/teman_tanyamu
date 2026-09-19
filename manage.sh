@@ -202,6 +202,51 @@ cmd_test() {
   node "$APP_DIR/test/e2e.test.js"
 }
 
+cmd_deploy() {
+  local target_dir="$HOME/docker/teman_tanyamu"
+  info "Memulai deployment produksi ke $target_dir..."
+  
+  # 1) Buat folder target jika belum ada
+  mkdir -p "$target_dir"
+  
+  # 2) Salin file-file utama
+  info "Menyalin aset kode terstabil ke folder Docker..."
+  cp -rf "$APP_DIR/server.js" "$target_dir/"
+  cp -rf "$APP_DIR/package.json" "$target_dir/"
+  cp -rf "$APP_DIR/package-lock.json" "$target_dir/"
+  cp -rf "$APP_DIR/Dockerfile" "$target_dir/"
+  cp -rf "$APP_DIR/docker-compose.yml" "$target_dir/"
+  cp -rf "$APP_DIR/production.env" "$target_dir/"
+  
+  # 3) Salin folder aset pendukung
+  mkdir -p "$target_dir/public" "$target_dir/lib"
+  cp -rf "$APP_DIR/public/"* "$target_dir/public/"
+  cp -rf "$APP_DIR/lib/"* "$target_dir/lib/"
+  
+  # 4) Salin database awal hanya jika belum ada di target (agar data asli prod tidak tertimpa!)
+  if [[ ! -f "$target_dir/chat.db" ]]; then
+    info "Menginisialisasi database produksi awal..."
+    cp -rf "$APP_DIR/chat.db" "$target_dir/"
+  else
+    warn "Database produksi sudah ada di $target_dir/chat.db (tidak ditimpa)."
+  fi
+  
+  # 5) Build dan nyalakan container Docker di folder target secara diam-diam (detached)
+  info "Membangun ulang container Docker produksi..."
+  cd "$target_dir"
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose up -d --build
+  elif docker compose version >/dev/null 2>&1; then
+    docker compose up -d --build
+  else
+    err "Perintah docker-compose atau docker compose tidak ditemukan. Pastikan Docker sudah terinstall!"
+    exit 1
+  fi
+  
+  info "Deployment selesai! Versi produksi kini tayang secara stabil di http://localhost:3001"
+  info "Tujuan Cloudflare Tunnel bisa diarahkan ke http://localhost:3001"
+}
+
 cmd_backup() {
   local dest="$APP_DIR/backups"
   mkdir -p "$dest"
@@ -271,6 +316,7 @@ cmd_help() {
   echo "  logs [n]         Lihat n baris log terakhir (default 50)"
   echo "  password         Reset password admin ke admin123"
   echo "  test             Jalankan regression suite"
+  echo "  deploy           Deploy versi produksi stabil ke Docker (port 3001)"
   echo "  help             Tampilkan bantuan ini"
 }
 
@@ -290,6 +336,7 @@ case "${1:-help}" in
   restore)      cmd_restore "${2:-}" ;;
   vacuum)       cmd_vacuum ;;
   test)         cmd_test ;;
+  deploy)       cmd_deploy ;;
   help|--help|-h) cmd_help ;;
   *)
     err "Perintah tidak dikenal: $1"

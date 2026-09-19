@@ -1,5 +1,32 @@
 const $ = (s) => document.querySelector(s);
 let currentUser = null;
+let csrfTokenGlobal = null; // Penampung token CSRF global di browser
+
+// --- Global Fetch Interceptor (Seamless CSRF Injector) ---
+const originalFetch = window.fetch;
+window.fetch = async function(url, options) {
+  options = options || {};
+  const method = (options.method || 'GET').toUpperCase();
+  
+  // Jika ini adalah request mutasi data ke API lokal, sisipkan CSRF token otomatis!
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && url.startsWith('/api/')) {
+    options.headers = options.headers || {};
+    const token = csrfTokenGlobal || (currentUser && currentUser.csrf_token);
+    if (token) {
+      if (options.headers instanceof Headers) {
+        options.headers.set('X-CSRF-Token', token);
+      } else if (Array.isArray(options.headers)) {
+        // format array header
+        const idx = options.headers.findIndex(h => h[0].toLowerCase() === 'x-csrf-token');
+        if (idx !== -1) options.headers[idx][1] = token;
+        else options.headers.push(['X-CSRF-Token', token]);
+      } else {
+        options.headers['X-CSRF-Token'] = token;
+      }
+    }
+  }
+  return originalFetch(url, options);
+};
 let currentChatId = null;
 let chats = [];
 let streaming = false;
@@ -356,6 +383,9 @@ $('#btn-guest').addEventListener('click', async () => {
     const r = await fetch('/api/guest', { method: 'POST' });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { $('#login-error').textContent = terr(data.error) || data.error || 'Error'; return; }
+    if (data.csrf_token) {
+      csrfTokenGlobal = data.csrf_token;
+    }
     await enterApp();
   } catch (e) {
     $('#login-error').textContent = 'Guest error: ' + e.message;
@@ -376,6 +406,9 @@ $('#login-form').addEventListener('submit', async (e) => {
   });
   const data = await r.json();
   const errEl = $('#login-error');
+  if (r.ok && data.csrf_token) {
+    csrfTokenGlobal = data.csrf_token;
+  }
   if (!r.ok) {
     if (data.error === 'ERR_RATE_LIMITED') {
       const sec = data.retryAfterSec || 120;
@@ -460,6 +493,9 @@ async function enterApp() {
   } catch (e) { return; }
   if (!r.ok) return;
   currentUser = await r.json();
+  if (currentUser && currentUser.csrf_token) {
+    csrfTokenGlobal = currentUser.csrf_token;
+  }
   const lv = $('#login-view');
   lv.classList.add('leaving');
   setTimeout(() => { lv.style.display = 'none'; lv.classList.remove('ready', 'leaving'); }, 160);
@@ -2962,6 +2998,9 @@ console.log('[TT] app v1.0-beta.6 fresh-load');
 
   if (user) {
     currentUser = user;
+    if (user.csrf_token) {
+      csrfTokenGlobal = user.csrf_token;
+    }
     $('#app-view').classList.add('ready', 'active');
   } else {
     $('#login-view').classList.add('ready');

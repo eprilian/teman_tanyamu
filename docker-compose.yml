@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  teman_tanyamu_app:
+    build: .
+    container_name: teman_tanyamu_prod
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - SESSION_SECRET=REDACTED_SET_IN_production.env
+      # Upstream 9Router fallback gateway settings for initial bootstrap
+      - ROUTER_BASE=http://localhost:20128/v1
+    volumes:
+      # Persistent SQLite database mount to preserve all your chat histories and settings on restart
+      - ./chat.db:/app/chat.db
+    ports:
+      # Maps host port 3001 to container port 3000 to enable side-by-side coexistence with dev (port 3000)
+      - "3001:3000"

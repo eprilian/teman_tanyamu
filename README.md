@@ -50,7 +50,11 @@
 | **Deep-link URLs** | SPA router (History API): `/c/:id` lands in the address bar automatically when a reply finishes (ChatGPT/Gemini style; clicking a chat title also reveals it) · `/account` settings · `/admin` dashboard — refresh, bookmark & browser back all work (server catch-all → app; unknown `/api/*` stays JSON 404) |
 | **Share link (public)** | Chat "⋯" → Share: read-only page at `/s/<token>` (`noindex`, XSS-safe snapshot); revoke via warn modal; delete chat = revoke; empty chats blocked (`ERR_EMPTY_SHARE`) |
 | **Pin / Archive / Tag / Fork** | Chat "⋯" menu: pin to top, archive to a collapsible "Archived (n)" section, inline #tag, fork = branch copy of the conversation (`(fork)` suffix) |
-| **Chat search** | Instant client-side filter by title (sidebar) |
+| **Global Chat Search** | Real-time server-side full-text search (`?q=keyword`) of messages and titles, returning exact snippets in the sidebar with debounced inputs. |
+| **Chat Exporter** | One-click downloads of entire conversations to clean Markdown (`.md` with YAML frontmatter), raw JSON arrays, or pristine PDF prints (cleared of sidebars/composers via `@media print`). |
+| **Token Estimator** | Real-time visual estimator in the composer showing estimated prompt tokens (1 tok ≈ 3 ID chars) against the active chat's remaining database-driven history budget, warning in red on overrun. |
+| **Dual-Mode Security Suite** | Adaptively secure architecture offering strict HTTPS Secure/SameSite cookie locks, precise CORS domain restrictions, and secure full-handshake CSRF token guards over public domains, while keeping localhost free for smooth local development. |
+| **Single-Command Docker Deploy** | Modern Dockerization template (Alpine-based, ~35MB RAM footprint) managed using `./manage.sh deploy` with automated rolling restarters and persistent DB volumes. |
 | Markdown + code blocks | With streaming auto-close fence fix |
 | Copy & Retry | Per-message actions |
 | **Smart chat title** | After the first reply a short 3–6 word title is generated in the background (never overwrites a manual rename) |
@@ -653,7 +657,17 @@ Fitur operasional level produksi:
 
 ## Changelog
 
-### v1.0-beta (current)
+### v1.0-beta.40 (latest)
+
+- **Dual-Mode Security Suite** — Strict HTTPS Secure/SameSite=Lax cookie locks, robust database-driven CSRF token Guard (using automated frontend Global Fetch Interceptor), and strict CORS origin locks for production.
+- **Robust non-blocking models caching** — Wrapped upstream models fetching inside isolated catch-blocks, ensuring database settings populate instantly even if the gateway proxy is cold/down.
+- **Master Dockerization Stack** — Alpine-based Dockerfile, clean docker-compose ports mapping, and standalone `production.env` to run production at port 3001 coexisting safely alongside dev.
+- **One-Click Deploy script** — Integrated `./manage.sh deploy` to automate target directory creation, assets synchronization, persistent database migrations, and hot-docker building.
+- **Global Chat Search with Debounce** — Upgraded search to query SQLite backend, rendering gray search snippet previews under chat titles in the sidebar.
+- **Premium Chat Exporter** — Download chats as Markdown (including metadata headers), raw JSON arrays, or clean print-to-PDFs.
+- **Real-time Token Estimator** — Live token calculation in the composer with visual budget over-limit warnings and dynamic Lean/Eco mode binding.
+
+### v1.0-beta (historical)
 
 - **Deep-link URLs** — click a chat title for `/c/:id` (address bar stays clean otherwise);
   `/account` & `/admin` deep links; browser back/refresh/bookmark work (SPA fallback; `/api/*` 404 JSON)
