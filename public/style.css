@@ -861,6 +861,17 @@ body.light #toast { box-shadow: 0 6px 24px rgba(0,0,0,0.18); }
 @media (max-width: 640px) {
   .audit-row { grid-template-columns: 20px 1fr; }
   .audit-actor, .audit-act { grid-column: 2; }
+  
+  /* Adaptive Layout for Centered Hint and Token Estimator on Mobile */
+  .composer-hint {
+    flex-direction: column !important;
+    gap: 6px !important;
+    padding-bottom: 4px !important;
+  }
+  .composer-hint #token-estimator {
+    position: static !important;
+    margin: 0 auto !important;
+  }
 }
 
 /* ---------- anti-spam pair (Token Saver) ---------- */
