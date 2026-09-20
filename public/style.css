@@ -982,22 +982,22 @@ button:active, .btn:active {
 }
 
 /* Smooth modal scaling popup transitions */
-.modal {
+.modal-backdrop {
   opacity: 0;
   visibility: hidden;
   transition: opacity 180ms ease, visibility 180ms ease;
   backdrop-filter: blur(0px);
 }
-.modal.active {
+.modal-backdrop.active {
   opacity: 1;
   visibility: visible;
   backdrop-filter: blur(6px);
 }
-.modal-content {
+.modal {
   transform: scale(0.94) translateY(8px);
   transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.modal.active .modal-content {
+.modal-backdrop.active .modal {
   transform: scale(1) translateY(0);
 }
 

@@ -504,6 +504,8 @@ async function enterApp() {
   renderSideAvatar();
   updateQuota();
   syncGuestState();
+  // Render welcome message immediately upon logging in
+  $('#messages').innerHTML = emptyStateHTML();
   if (currentUser.role === 'admin') $('#btn-admin').classList.add('show');
   await Promise.all([loadModels(), loadChats()]); // parallel boot: no serial gateway wait
   updateModelBadge();
@@ -917,27 +919,44 @@ document.addEventListener('scroll', (e) => {
   closeModelCombo(); closeChatMenu();
 }, true);
 
-$('#model-select').addEventListener('change', async (e) => {
+// Store previous model selection to restore if user cancels the confirmation warn-modal
+let previousSelectedModel = $('#model-select').value;
+
+$('#model-select').addEventListener('change', (e) => {
   const model = e.target.value;
-  localStorage.setItem('model', model);
-  updateModelBadge();
-  if (currentChatId) {
-    await fetch(`/api/chats/${currentChatId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-  }
-  if (currentUser && currentUser.role === 'admin') {
-    await fetch('/api/me/model', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-    const me = await (await fetch('/api/me')).json();
-    if (me.username) { currentUser = me; updateQuota(); updateModelBadge(); afterGuestRefresh(); }
-  }
-  toast(t('model_changed', model), 'success');
+  const original = previousSelectedModel;
+  
+  openWarn({
+    title: t('token_title') || 'Change Active Model',
+    text: `Are you sure you want to switch the active model to "${model}"?`,
+    okLabel: t('reset_btn') || 'Confirm',
+    onOk: async () => {
+      previousSelectedModel = model;
+      localStorage.setItem('model', model);
+      updateModelBadge();
+      if (currentChatId) {
+        await fetch(`/api/chats/${currentChatId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model })
+        });
+      }
+      if (currentUser && currentUser.role === 'admin') {
+        await fetch('/api/me/model', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model })
+        });
+        const me = await (await fetch('/api/me')).json();
+        if (me.username) { currentUser = me; updateQuota(); updateModelBadge(); afterGuestRefresh(); }
+      }
+      toast(t('model_changed', model), 'success');
+    },
+    onCancel: () => {
+      // Revert the dropdown selection to its previous state
+      $('#model-select').value = original;
+    }
+  });
 });
 
 // ---------- chats ----------
@@ -1352,6 +1371,7 @@ async function openChat(id) {
   const r = await fetch(`/api/chats/${id}`);
   const chat = await r.json();
   $('#model-select').value = chat.model;
+  previousSelectedModel = chat.model; // Sync previous selected model to prevent warning trigger
   updateModelCombo($('#model-select'));
   localStorage.setItem('model', chat.model);
   updateModelBadge();
@@ -1597,7 +1617,7 @@ async function ensureChat() {
   const r = await fetch('/api/chats', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: $('#model-select').value })
+    body: JSON.stringify({ model: $('#model-select').value, lean: chatLean ? 1 : 0 })
   });
   const chat = await r.json();
   currentChatId = chat.id;
@@ -1893,9 +1913,9 @@ $('#btn-lean').addEventListener('click', async () => {
     toast(focusMode ? t('lean_on') : t('lean_off'));
     return;
   }
-  if (!currentChatId) { toast(t('new_chat')); return; }
   chatLean = !chatLean;
   applyLeanUI();
+  updateTokenEstimate();
   toast(chatLean ? t('lean_on') : t('lean_off'));
   await fetch(`/api/chats/${currentChatId}/lean`, {
     method: 'PATCH',
