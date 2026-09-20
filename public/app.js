@@ -508,6 +508,8 @@ async function enterApp() {
   await Promise.all([loadModels(), loadChats()]); // parallel boot: no serial gateway wait
   updateModelBadge();
   await applyWallpaper();
+  // Ensure token estimator is beautifully synced with dynamic database setting immediately on boot/refresh
+  updateTokenEstimate();
 }
 
 function effectiveChatModel() {
@@ -1309,6 +1311,9 @@ $('#confirm-ok').addEventListener('click', async () => {
   if (pendingDeleteId === currentChatId) {
     currentChatId = null;
     $('#messages').innerHTML = emptyStateHTML();
+    // Clean browser address bar immediately back to home URL (/) to prevent 404/not-found on refresh
+    window.history.pushState(null, '', '/');
+    updateModelBadge();
   }
   pendingDeleteId = null;
   await loadChats();
@@ -2298,7 +2303,14 @@ async function loadAdminStats() {
   const days = ($('#stat-days .seg-btn.active') || {}).dataset ? Number($('#stat-days .seg-btn.active').dataset.days) : 1;
   const sub = $('#admin-stat-sub'); if (sub) sub.textContent = t('stat_sub', Number(days));
   try { statCache = await (await fetch('/api/admin/stats?days=' + days)).json(); } catch (_) { statCache = null; }
-  renderAdminStats();
+  
+  const cv = $('#stat-chart');
+  if (cv && cv.clientWidth === 0) {
+    // If modal is transitioning open, wait 150ms for transition to finish so width is measured accurately
+    setTimeout(() => { renderAdminStats(); }, 150);
+  } else {
+    renderAdminStats();
+  }
 }
 $('#stat-days').addEventListener('click', (e) => {
   const b = e.target.closest('.seg-btn');
@@ -2343,10 +2355,9 @@ function renderAdminStats() {
   const cards = $('#stat-cards'), charts = $('#stat-chart'), models = $('#stat-models'), users = $('#stat-users');
   if (!cards || !charts || !statCache) return;
   const tt = statCache.totals || {};
-  // admin poll every 5 s: skip re-render when the numbers are identical (no flicker / no replayed cascade anim)
-  const sig = JSON.stringify(statCache) + (document.body.classList.contains('light') ? 'L' : 'D');
-  if (sig === statsSig) return;
-  statsSig = sig;
+  
+  // Clear statistical rendering signature to force clean redrawing and prevent frozen canvas
+  statsSig = '';
   cards.innerHTML = [
     [t('stat_reqs'), fmtK(tt.reqs), t('stat_card_hint_reqs'), 'violet'],
     [t('stat_tok'), fmtK(tt.tok), t('stat_card_hint_tok'), 'blue'],
@@ -2422,22 +2433,33 @@ function renderStatChart() {
   g.clearRect(0, 0, W, H);
   const maxR = Math.max(1, ...series.map(s => s.reqs));
   const maxT = Math.max(1, ...series.map(s => s.tok));
-  const padT = 6, axisY = H - 22;
-  const slot = (W - 6) / series.length;
-  const bw = Math.max(2, slot - 3);
-  g.strokeStyle = cs.getPropertyValue('--border') || '#333';
-  g.beginPath(); g.moveTo(0, axisY + 0.5); g.lineTo(W, axisY + 0.5); g.stroke();
+  const padT = 16, axisY = H - 24;
+  const slot = (W - 32) / series.length; // Leave padding for Y-Axis labels
+  const bw = Math.max(3, slot - 3);
+  
+  // Draw subtle horizontal grid guidelines
+  g.strokeStyle = 'rgba(128,128,128,0.12)';
+  g.lineWidth = 1;
+  [0.25, 0.5, 0.75, 1.0].forEach(p => {
+    const gy = axisY - Math.round(p * (axisY - padT));
+    g.beginPath(); g.moveTo(32, gy + 0.5); g.lineTo(W, gy + 0.5); g.stroke();
+  });
+
+  g.strokeStyle = cs.getPropertyValue('--border') || 'rgba(128,128,128,0.3)';
+  g.beginPath(); g.moveTo(32, axisY + 0.5); g.lineTo(W, axisY + 0.5); g.stroke();
+  
   const colA = cs.getPropertyValue('--accent').trim() || '#3b82f6';
   const colT = cs.getPropertyValue('--success').trim() || '#22c55e';
   series.forEach((s, i) => {
-    const x = 3 + i * slot;
+    const x = 35 + i * slot;
     const hR = Math.round((s.reqs / maxR) * (axisY - padT));
     g.fillStyle = colA;
     g.fillRect(x, axisY - hR, bw, hR);
     if (s.tok > 0) {
-      g.fillStyle = colT + 'AA';
+      g.fillStyle = colT + 'BB';
       const x2 = x + bw + 1;
-      if (x2 + 2 < W) g.fillRect(x2, axisY - Math.round((s.tok / maxT) * (axisY - padT)), 2, Math.max(1, Math.round((s.tok / maxT) * (axisY - padT))));
+      const hT = Math.round((s.tok / maxT) * (axisY - padT));
+      if (x2 + 2 < W) g.fillRect(x2, axisY - hT, 2, Math.max(1, hT));
     }
   });
   // x labels
@@ -2446,20 +2468,37 @@ function renderStatChart() {
   g.textAlign = 'center';
   series.forEach((s, i) => {
     if (!s.showTick) return;
-    const x = 3 + i * slot + bw / 2;
+    const x = 35 + i * slot + bw / 2;
     if (x > W - 12) return;
     g.fillText(s.tick, x, axisY + 11);
   });
+
+  // Render Y-Axis maximum metrics labels (Requests and Tokens) elastically
+  g.textAlign = 'right';
+  g.font = '8px Inter, sans-serif';
+  g.fillStyle = colA;
+  g.fillText(fmtK(maxR), 28, padT + 4);
+  g.fillStyle = colT;
+  g.fillText(fmtK(maxT), 28, padT + 12);
+
   g.textAlign = 'left';
   g.font = '10px Inter, sans-serif';
-  g.fillText(t('stat_reqs') + ' ▮ ' + t('stat_tok') + ' ▮', 2, H - 3);
+  g.fillStyle = cs.getPropertyValue('--text-2') || '#aaa';
+  g.fillText(t('stat_reqs') + ' ▮ (' + colA + ')  ' + t('stat_tok') + ' ▮ (' + colT + ')', 35, H - 3);
 }
 
-$('#guest-reset').addEventListener('click', async () => {
-  $('#set-guest-enabled').checked = true;
-  $('#set-guest-chats').value = 10;
-  $('#set-guest-minutes').value = 5;
-  $('#guest-save').dispatchEvent(new MouseEvent('click', { bubbles: false }));
+$('#guest-reset').addEventListener('click', () => {
+  openWarn({
+    title: t('reset_btn') + ' Guest Settings',
+    text: t('admin_reset_all_confirm') || 'Are you sure you want to reset all guest configurations to default values?',
+    okLabel: t('reset_btn'),
+    onOk: async () => {
+      $('#set-guest-enabled').checked = true;
+      $('#set-guest-chats').value = 10;
+      $('#set-guest-minutes').value = 5;
+      $('#guest-save').dispatchEvent(new MouseEvent('click', { bubbles: false }));
+    }
+  });
 });
 
 // ---------- admin: System & Operations (#1 backup + #7 audit trail) ----------
@@ -2504,34 +2543,41 @@ $('#ops-backup').addEventListener('click', async () => {
 });
 $('#ops-audit-more').addEventListener('click', () => { auditOffset += AUDIT_PAGE; loadOpsPanel(false); });
 
-$('#token-reset').addEventListener('click', async () => {
-  const body = {
-    history_token_budget: 1600,
-    max_reply_tokens: 4096,
-    timeout_ms: 120,
-    gen_limit_max: 30,
-    gen_limit_window_sec: 90,
-    memory_enabled: true
-  };
-  const r = await fetch('/api/admin/settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+$('#token-reset').addEventListener('click', () => {
+  openWarn({
+    title: t('reset_btn') + ' Settings',
+    text: t('admin_reset_all_confirm') || 'Are you sure you want to reset all token configurations to default values?',
+    okLabel: t('reset_btn'),
+    onOk: async () => {
+      const body = {
+        history_token_budget: 1600,
+        max_reply_tokens: 4096,
+        timeout_ms: 120,
+        gen_limit_max: 30,
+        gen_limit_window_sec: 90,
+        memory_enabled: true
+      };
+      const r = await fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await r.json();
+      if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
+      if (currentUser) {
+        currentUser.history_token_budget = 1600;
+        updateTokenEstimate();
+      }
+      $('#set-hist-budget').value = 1600;
+      $('#set-max-reply').value = 4096;
+      $('#set-ctx-win').value = 8192;
+      $('#set-timeout').value = 120;
+      $('#set-gen-max').value = 30;
+      $('#set-gen-window').value = 90;
+      $('#set-memory-enabled').checked = true;
+      toast(t('token_saved'), 'success');
+    }
   });
-  const data = await r.json();
-  if (!r.ok) { toast(terr(data.error) || data.error, 'error'); return; }
-  if (currentUser) {
-    currentUser.history_token_budget = 1600;
-    updateTokenEstimate();
-  }
-  $('#set-hist-budget').value = 1600;
-  $('#set-max-reply').value = 4096;
-  $('#set-ctx-win').value = 8192;
-  $('#set-timeout').value = 120;
-  $('#set-gen-max').value = 30;
-  $('#set-gen-window').value = 90;
-  $('#set-memory-enabled').checked = true;
-  toast(t('token_reset'), 'success');
 });
 
 let pendingResetAll = false;
