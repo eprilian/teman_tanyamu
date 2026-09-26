@@ -1550,8 +1550,8 @@ function messageHTML(role, content, streaming, mid, prevUserId) {
       </div>` : ''}
       ${!isUser && !streaming ? meta : ''}
       ${!isUser && !streaming ? `<div class="m-actions">
-        <button data-copy>${ICON_COPY} ${esc(t('copy'))}</button>
-        <button data-regen="${prevUserId || ''}">${ICON_REFRESH} ${esc(t('regen'))}</button>
+        <button data-copy>${ICON_COPY} <span class="mact-label">${esc(t('copy'))}</span></button>
+        <button data-regen="${prevUserId || ''}">${ICON_REFRESH} <span class="mact-label">${esc(t('regen'))}</span></button>
       </div>` : ''}
     </div>
   </div>`;
@@ -1576,7 +1576,12 @@ document.addEventListener('click', async (e) => {
     const body = copyBtn.closest('.m-body');
     const content = body.querySelector('.m-content');
     if (content) {
-      await navigator.clipboard.writeText(content.textContent);
+      // clone & strip injected code-head labels ("js Copy") so the copied text is clean
+      const clone = content.cloneNode(true);
+      clone.querySelectorAll('.code-head, .stream-caret').forEach(n => n.remove());
+      await navigator.clipboard.writeText(clone.textContent.trim());
+      const lbl = copyBtn.querySelector('.mact-label');
+      if (lbl) { const old = lbl.textContent; lbl.textContent = t('copied_short'); setTimeout(() => { lbl.textContent = old; }, 1200); }
       toast(t('copied'), 'success');
     }
     return;
