@@ -274,11 +274,62 @@ function getStreamBubble(box) {
   return list.length ? list[list.length - 1] : null;
 }
 
+// Throttled streaming renderer: re-parsing full markdown on every token is O(n^2) and
+// freezes the tab on long/heavy replies. Paint at most once per ~80ms during streaming
+// (like ChatGPT/Gemini); caller does one final flush at stream end.
+let _streamRAF = 0;
+let _streamLast = 0;
+function renderStreamThrottled(bubble, text, box) {
+  const now = performance.now();
+  const paint = () => {
+    _streamRAF = 0;
+    _streamLast = performance.now();
+    bubble.innerHTML = renderMarkdown(text);
+    if (box) box.scrollTop = box.scrollHeight;
+  };
+  if (now - _streamLast >= 80) { paint(); return; }
+  if (_streamRAF) return;
+  _streamRAF = requestAnimationFrame(() => {
+    if (performance.now() - _streamLast >= 80) paint();
+    else { _streamRAF = 0; }
+  });
+}
+function flushStreamRender(bubble, text, box) {
+  if (_streamRAF) { cancelAnimationFrame(_streamRAF); _streamRAF = 0; }
+  bubble.innerHTML = renderMarkdown(text);
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
 function renderMarkdown(text) {
+  // Prefer marked + DOMPurify (GPT/Gemini-grade: headings, lists, tables, blockquotes, nested code)
+  if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+    try {
+      // Auto-close an unterminated ``` fence mid-stream so code renders as a block, not raw
+      let src = text;
+      const fences = (src.match(/```/g) || []).length;
+      if (fences % 2 === 1) src += '\n```';
+      let html = marked.parse(src, { gfm: true, breaks: true });
+      html = DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      // Wrap each code block: header (language + copy button)
+      tmp.querySelectorAll('pre > code').forEach(el => {
+        const cls = (el.className || '').match(/language-([\w-]+)/);
+        const lang = cls ? cls[1] : '';
+        if (typeof hljs !== 'undefined') { try { hljs.highlightElement(el); } catch (_) {} }
+        const pre = el.parentElement;
+        const head = document.createElement('div');
+        head.className = 'code-head';
+        head.innerHTML = `<span class="code-lang">${esc(lang || 'text')}</span><button type="button" class="code-copy" tabindex="-1">${ICON_COPY} copy</button>`;
+        pre.insertBefore(head, el);
+      });
+      return tmp.innerHTML;
+    } catch (_) { /* fall through to legacy renderer */ }
+  }
+  // Legacy fallback (no vendor libs loaded yet)
   let html = esc(text);
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) =>
     `<pre><code>${code}</code></pre>`);
-  // streaming: auto-close unterminated code fence so python code renders as block, not raw
   const openFence = html.match(/```(\w*)\n?([\s\S]*)$/);
   if (openFence) {
     html = html.slice(0, openFence.index) + `<pre><code>${openFence[2]}</code></pre>`;
@@ -1677,12 +1728,12 @@ async function sendTemp(text) {
           if (chunk.usage) { lastUsage = chunk.usage; continue; }
           if (chunk.content) {
             aiText += chunk.content;
-            bubble.innerHTML = renderMarkdown(aiText);
-            box.scrollTop = box.scrollHeight;
+            renderStreamThrottled(bubble, aiText, box);
           }
         } catch (e) { if (e.message && !e.message.includes('JSON')) throw e; }
       }
     }
+    if (bubble) flushStreamRender(bubble, aiText, box);
     if (lastUsage && bubble) {
       const el = document.createElement('div');
       el.innerHTML = metaChipsHTML(lastUsage);
@@ -1798,12 +1849,12 @@ async function send() {
           if (chunk.usage) { lastUsage = chunk.usage; continue; }
           if (chunk.content) {
             aiText += chunk.content;
-            bubble.innerHTML = renderMarkdown(aiText);
-            box.scrollTop = box.scrollHeight;
+            renderStreamThrottled(bubble, aiText, box);
           }
         } catch (e) { if (e.message && !e.message.includes('JSON')) throw e; }
       }
     }
+    if (bubble) flushStreamRender(bubble, aiText, box);
     if (lastUsage && bubble) {
       bubble.classList.remove('stream-target');
       const el = document.createElement('div');
@@ -2005,7 +2056,8 @@ $('#btn-minimize').addEventListener('click', (e) => {
 });
 $('#sidebar').addEventListener('click', (e) => {
   if (!$('#sidebar').classList.contains('minimized')) return;
-  if (e.target.closest('[data-del], [data-rename], .user-model-select, .icon-btn, button')) return;
+  // chat icons + avatar are actionable even while minimized (open chat / account) — don't hijack them to expand
+  if (e.target.closest('[data-del], [data-rename], .user-model-select, .icon-btn, button, .chat-item, #avatar-init, .avatar')) return;
   setSidebarMinimized(false);
 });
 if (localStorage.getItem(SIDEBAR_KEY) === '1') {
