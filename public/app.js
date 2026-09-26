@@ -279,13 +279,31 @@ function getStreamBubble(box) {
 // (like ChatGPT/Gemini); caller does one final flush at stream end.
 let _streamRAF = 0;
 let _streamLast = 0;
+// smart auto-scroll: like GPT/Gemini, stop pinning to bottom the moment the user scrolls up to read.
+function isNearBottom(box) {
+  if (!box) return true;
+  return (box.scrollHeight - box.scrollTop - box.clientHeight) < 80;
+}
+function appendCaret(bubble) {
+  if (!bubble) return;
+  // put a blinking caret at the very end of the last text-bearing node (GPT-style)
+  const caret = document.createElement('span');
+  caret.className = 'stream-caret';
+  const last = bubble.lastElementChild;
+  // avoid injecting caret inside a code block header/pre; append at block level instead
+  if (last && /^(PRE|TABLE|UL|OL|BLOCKQUOTE)$/.test(last.tagName)) bubble.appendChild(caret);
+  else if (last) last.appendChild(caret);
+  else bubble.appendChild(caret);
+}
 function renderStreamThrottled(bubble, text, box) {
   const now = performance.now();
   const paint = () => {
     _streamRAF = 0;
     _streamLast = performance.now();
+    const stick = isNearBottom(box);
     bubble.innerHTML = renderMarkdown(text);
-    if (box) box.scrollTop = box.scrollHeight;
+    appendCaret(bubble);
+    if (box && stick) box.scrollTop = box.scrollHeight;
   };
   if (now - _streamLast >= 80) { paint(); return; }
   if (_streamRAF) return;
@@ -296,8 +314,14 @@ function renderStreamThrottled(bubble, text, box) {
 }
 function flushStreamRender(bubble, text, box) {
   if (_streamRAF) { cancelAnimationFrame(_streamRAF); _streamRAF = 0; }
-  bubble.innerHTML = renderMarkdown(text);
-  if (box) box.scrollTop = box.scrollHeight;
+  const stick = isNearBottom(box);
+  bubble.innerHTML = renderMarkdown(text); // final paint: no caret
+  if (box && stick) box.scrollTop = box.scrollHeight;
+}
+
+// Configure marked once (GPT/Gemini parity: GFM tables, autolinks, line breaks).
+if (typeof marked !== 'undefined') {
+  try { marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false }); } catch (_) {}
 }
 
 function renderMarkdown(text) {
@@ -308,11 +332,18 @@ function renderMarkdown(text) {
       let src = text;
       const fences = (src.match(/```/g) || []).length;
       if (fences % 2 === 1) src += '\n```';
-      let html = marked.parse(src, { gfm: true, breaks: true });
-      html = DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
+      let html = marked.parse(src);
+      html = DOMPurify.sanitize(html, { ADD_ATTR: ['target', 'rel'] });
       const tmp = document.createElement('div');
       tmp.innerHTML = html;
-      // Wrap each code block: header (language + copy button)
+      // external links open safely in a new tab (GPT/Gemini behaviour)
+      tmp.querySelectorAll('a[href]').forEach(a => {
+        const href = a.getAttribute('href') || '';
+        if (/^https?:\/\//i.test(href)) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      });
+      // GFM task-list checkboxes: keep visible but non-interactive
+      tmp.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.disabled = true; });
+      // Wrap each code block: header (language label + copy button)
       tmp.querySelectorAll('pre > code').forEach(el => {
         const cls = (el.className || '').match(/language-([\w-]+)/);
         const lang = cls ? cls[1] : '';
@@ -320,7 +351,8 @@ function renderMarkdown(text) {
         const pre = el.parentElement;
         const head = document.createElement('div');
         head.className = 'code-head';
-        head.innerHTML = `<span class="code-lang">${esc(lang || 'text')}</span><button type="button" class="code-copy" tabindex="-1">${ICON_COPY} copy</button>`;
+        const copyLabel = (typeof t === 'function') ? t('copy') : 'Copy';
+        head.innerHTML = `<span class="code-lang">${esc(lang || 'text')}</span><button type="button" class="code-copy" tabindex="-1">${ICON_COPY} <span class="cc-label">${esc(copyLabel)}</span></button>`;
         pre.insertBefore(head, el);
       });
       return tmp.innerHTML;
@@ -1523,8 +1555,10 @@ document.addEventListener('click', async (e) => {
     const code = pre ? pre.querySelector('code') : null;
     if (code) {
       await navigator.clipboard.writeText(code.textContent);
-      const old = cc.innerHTML; cc.innerHTML = ICON_COPY + ' ok';
-      setTimeout(() => { cc.innerHTML = old; }, 1200);
+      const lbl = cc.querySelector('.cc-label');
+      const okTxt = (typeof t === 'function') ? t('copied_short') : 'Copied';
+      if (lbl) { const old = lbl.textContent; lbl.textContent = okTxt; cc.classList.add('done'); setTimeout(() => { lbl.textContent = old; cc.classList.remove('done'); }, 1200); }
+      else { const old = cc.innerHTML; cc.innerHTML = ICON_COPY + ' ok'; setTimeout(() => { cc.innerHTML = old; }, 1200); }
     }
     return;
   }
