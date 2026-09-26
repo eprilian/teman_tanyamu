@@ -290,8 +290,8 @@ function appendCaret(bubble) {
   const caret = document.createElement('span');
   caret.className = 'stream-caret';
   const last = bubble.lastElementChild;
-  // avoid injecting caret inside a code block header/pre; append at block level instead
-  if (last && /^(PRE|TABLE|UL|OL|BLOCKQUOTE)$/.test(last.tagName)) bubble.appendChild(caret);
+  // avoid injecting caret inside a code block / table wrapper / list; append at block level instead
+  if (last && /^(PRE|TABLE|UL|OL|BLOCKQUOTE|DIV|HR)$/.test(last.tagName)) bubble.appendChild(caret);
   else if (last) last.appendChild(caret);
   else bubble.appendChild(caret);
 }
@@ -354,6 +354,15 @@ function renderMarkdown(text) {
         const copyLabel = (typeof t === 'function') ? t('copy') : 'Copy';
         head.innerHTML = `<span class="code-lang">${esc(lang || 'text')}</span><button type="button" class="code-copy" tabindex="-1">${ICON_COPY} <span class="cc-label">${esc(copyLabel)}</span></button>`;
         pre.insertBefore(head, el);
+      });
+      // Wrap each table so borders form one continuous rounded grid (border-radius is ignored on
+      // border-collapse tables; a wrapper gives the clean unified look GPT/Gemini use) + horizontal scroll.
+      tmp.querySelectorAll('table').forEach(tbl => {
+        if (tbl.parentElement && tbl.parentElement.classList.contains('md-table-wrap')) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'md-table-wrap';
+        tbl.replaceWith(wrap);
+        wrap.appendChild(tbl);
       });
       return tmp.innerHTML;
     } catch (_) { /* fall through to legacy renderer */ }
