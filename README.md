@@ -16,23 +16,39 @@
 
 ---
 
+## Screenshots
+
+| | |
+|---|---|
+| **Login page** — username/password + guest access | ![Login page](docs/screenshots/01-login.png) |
+| **Chat home** — empty welcome state, model picker, Eco/Temp/Export | ![Chat home](docs/screenshots/02-chat-home.png) |
+| **Chat conversation** — streamed reply, unified table, per-reply stats strip | ![Chat conversation](docs/screenshots/03-chat-conversation.png) |
+| **Admin — Users** — roles, per-user model, quota, actions | ![Admin users](docs/screenshots/04-admin-users.png) |
+| **Admin — Usage Statistics** — stat cards, requests-by-mode, per-hour chart | ![Admin statistics](docs/screenshots/05-admin-stats.png) |
+| **Account Settings** — avatar, password, cross-chat memory | ![Account settings](docs/screenshots/06-account-settings.png) |
+
+> Screenshots are captured on the dark theme at v1.0-beta.47. Sample chat content shown is illustrative.
+
+---
+
 ## Table of Contents
 
-1. [Features](#features)
-2. [System Architecture](#system-architecture)
-3. [Request Flow Diagrams](#request-flow-diagrams)
-4. [Requirements](#requirements)
-5. [Installation](#installation)
-6. [Management Script](#management-script-managesh)
-7. [Configuration](#configuration)
-8. [API Reference](#api-reference)
-9. [Database Schema](#database-schema)
-10. [Access from Other Devices](#access-from-other-devices)
-11. [Production Deploy (Docker)](#production-deploy-docker-port-3001)
-12. [Performance](#performance)
-13. [Security Notes](#security-notes)
-14. [Troubleshooting](#troubleshooting)
-15. [Changelog](#changelog)
+1. [Screenshots](#screenshots)
+2. [Features](#features)
+3. [System Architecture](#system-architecture)
+4. [Request Flow Diagrams](#request-flow-diagrams)
+5. [Requirements](#requirements)
+6. [Installation](#installation)
+7. [Management Script](#management-script-managesh)
+8. [Configuration](#configuration)
+9. [API Reference](#api-reference)
+10. [Database Schema](#database-schema)
+11. [Access from Other Devices](#access-from-other-devices)
+12. [Production Deploy (Docker)](#production-deploy-docker-port-3001)
+13. [Performance](#performance)
+14. [Security Notes](#security-notes)
+15. [Troubleshooting](#troubleshooting)
+16. [Changelog](#changelog)
 
 ---
 
