@@ -1,7 +1,7 @@
-# Teman Tanyamu (dash_ai_me)
+# Teman Tanyamu
 
 > Lightweight self-hosted AI chat web app. An Open WebUI alternative with **under 100 MB RAM**.
-> No Docker. No build step. One Node.js process + one SQLite file.
+> One Node.js process + one SQLite file for development — with an optional single-command Docker deploy for production.
 
 | | |
 |---|---|
@@ -9,8 +9,9 @@
 | **AI Backend** | 9Router (`http://localhost:20128/v1`, OpenAI-compatible) |
 | **Providers** | AG, Groq, BAI, OpenRouter, Nvidia, Cline — 497+ models |
 | **Frontend** | `index.html` + `style.css` + `app.js`, zero framework, dark theme |
+| **Rich replies** | GPT/Gemini-grade Markdown via bundled `marked` + `DOMPurify` (tables, lists, code, blockquotes) |
 | **Language** | English (default) / Indonesian — runtime toggle |
-| **Version** | v1.0-beta |
+| **Version** | v1.0-beta.47 |
 | **License** | Private / personal use |
 
 ---
@@ -27,10 +28,11 @@
 8. [API Reference](#api-reference)
 9. [Database Schema](#database-schema)
 10. [Access from Other Devices](#access-from-other-devices)
-11. [Performance](#performance)
-12. [Security Notes](#security-notes)
-13. [Troubleshooting](#troubleshooting)
-14. [Changelog](#changelog)
+11. [Production Deploy (Docker)](#production-deploy-docker-port-3001)
+12. [Performance](#performance)
+13. [Security Notes](#security-notes)
+14. [Troubleshooting](#troubleshooting)
+15. [Changelog](#changelog)
 
 ---
 
@@ -44,7 +46,7 @@
 | Multi-session history | Per-user isolation in SQLite |
 | Chat memory | Token-budget context window (default 1600 tokens ≈ 15–30 msgs, oldest auto-compressed) + rolling background summary of older turns |
 | **Cross-chat memory** | Auto-extracted personal facts per user (max 20), injected into every chat; editable in Settings → Memory |
-| **Token saver** | `max_tokens` reply cap (default 1024), history budget, per-chat **Lean ⚡** toggle (answers without history) |
+| **Token saver** | `max_tokens` reply cap (default 4096, slider up to 16384), history budget, per-chat **Lean ⚡** toggle (answers without history) |
 | Per-reply usage badge | prompt / completion / total tokens shown under each AI reply |
 | Rename / Delete chats | Via sidebar hover buttons; rename uses custom in-app dialog (bilingual, no native prompt) |
 | **Deep-link URLs** | SPA router (History API): `/c/:id` lands in the address bar automatically when a reply finishes (ChatGPT/Gemini style; clicking a chat title also reveals it) · `/account` settings · `/admin` dashboard — refresh, bookmark & browser back all work (server catch-all → app; unknown `/api/*` stays JSON 404) |
@@ -55,7 +57,7 @@
 | **Token Estimator** | Real-time visual estimator in the composer showing estimated prompt tokens (1 tok ≈ 3 ID chars) against the active chat's remaining database-driven history budget, warning in red on overrun. |
 | **Dual-Mode Security Suite** | Adaptively secure architecture offering strict HTTPS Secure/SameSite cookie locks, precise CORS domain restrictions, and secure full-handshake CSRF token guards over public domains, while keeping localhost free for smooth local development. |
 | **Single-Command Docker Deploy** | Modern Dockerization template (Alpine-based, ~35MB RAM footprint) managed using `./manage.sh deploy` with automated rolling restarters and persistent DB volumes. |
-| Markdown + code blocks | With streaming auto-close fence fix |
+| Rich Markdown replies | GPT/Gemini-grade rendering (see [Reply Rendering](#reply-rendering-v10-beta44-47)) |
 | Copy & Retry | Per-message actions |
 | **Smart chat title** | After the first reply a short 3–6 word title is generated in the background (never overwrites a manual rename) |
 | **Edit & regenerate** | Pencil on any user message → inline edit → save truncates everything after it; ↻ button regenerates from the last user message |
@@ -114,6 +116,16 @@ Compact dashboard: period as segmented pills (1d/7d/30d/90d, default 1d) beside 
   (`context_length`, `max_completion_tokens`) feeds the % chip — switch models and the % follows each
   model's real window. The admin **Fallback context window** setting (validated 1,024-1,048,576,
   `ERR_BAD_CTXWIN`) is only used for models with no provider metadata (e.g. combo routes).
+
+### Reply Rendering (v1.0-beta.44-47)
+How AI answers are turned into rich, ChatGPT/Gemini-style output:
+- **Markdown engine**: replies are parsed with bundled **`marked`** (GFM, line breaks) then sanitized with **`DOMPurify`** — both served from `/vendor/` (no CDN, safe on a low-bandwidth host). Supported: headings, ordered/unordered/**nested** lists, GFM task-list checkboxes (`- [x]`), blockquotes, horizontal rules, inline `code`/**bold**/*italic*, and links (external links get `target="_blank"` + `rel="noopener noreferrer"`).
+- **Unified tables**: Markdown tables render as one continuous rounded grid — a single collapsed border (via the `.md-table-wrap` wrapper), header divider, zebra striping, row hover, and horizontal scroll on narrow screens. No more separated per-cell borders.
+- **Code blocks**: each fenced block gets a header bar (language label + copy button) and is syntax-highlighted by highlight.js; copying confirms with a bilingual "Copied/Tersalin".
+- **Clean copy**: the per-message Copy action strips the injected code-header labels and the streaming caret, so what you paste is the verbatim answer.
+- **Throttled streaming**: during streaming the DOM is re-rendered at most ~every 80 ms (via `requestAnimationFrame`) with a single final flush — this fixes the O(n²) freeze that used to lock the tab on long replies with many code blocks.
+- **Streaming caret**: a blinking cursor follows the live text and disappears when the reply completes.
+- **Smart auto-scroll**: auto-follow pauses the moment you scroll up to read and resumes when you return to the bottom.
 
 ### Models
 
@@ -288,7 +300,7 @@ Resolution order:  user override  >  global default
 ## Installation
 
 ```bash
-cd dash_ai_me
+cd teman_tanyamu
 npm install        # express + better-sqlite3
 node server.js     # http://localhost:3000
 ```
@@ -315,11 +327,19 @@ All-in-one service manager (systemd user service):
 ./manage.sh disable-boot     # Disable boot autostart
 ./manage.sh logs [n]         # Last n log lines (default 50)
 ./manage.sh password         # Reset admin password to admin123
+./manage.sh backup           # Snapshot chat.db into backups/ (timestamped)
+./manage.sh restore <file>   # Restore a backup file over chat.db (stops first)
+./manage.sh vacuum           # Compact + checkpoint the SQLite database
+./manage.sh test             # Run the end-to-end regression suite (50 assertions)
+./manage.sh deploy           # Build & (re)start the production Docker stack on port 3001
 ./manage.sh help             # Show help
 ```
 
 > `enable-boot` runs `loginctl enable-linger` so the service runs
 > without an active desktop session.
+>
+> `deploy` copies the app into `~/docker/teman_tanyamu/`, migrates the persistent
+> database volume, and rebuilds/restarts the container (see **Production Deploy** below).
 
 ---
 
@@ -348,12 +368,13 @@ PORT=8080 ROUTER_BASE=http://192.168.1.10:20128/v1 ROUTER_KEY=*** node server.js
 | Path | Description |
 |---|---|
 | `chat.db` | SQLite database (WAL mode) |
-| `public/index.html` | Struktur halaman SPA (login + app shell) |
-| `public/style.css` | Seluruh styling frontend |
-| `public/app.js` | Seluruh logika frontend |
+| `public/index.html` | SPA page structure (login + app shell) |
+| `public/style.css` | All frontend styling |
+| `public/app.js` | All frontend logic |
+| `public/vendor/` | Bundled libraries (highlight.js, marked, DOMPurify) — no CDN |
 | `server.js` | Backend (single file) |
 | `.port` | Persisted port number (created by `manage.sh port`) |
-| `~/.config/systemd/user/dash-ai-me.service` | systemd unit |
+| `~/.config/systemd/user/teman-tanyamu.service` | systemd unit |
 
 ---
 
@@ -443,7 +464,7 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | GET | `/api/admin/stats` | `?days=1..365` (def 30) | Usage statistics: totals, per-day series, top models/users, guest sessions |
 | POST | `/api/admin/guest-purge-now` | - | Purge all guest data immediately |
 | GET | `/api/admin/settings` | - | Global settings + today's token totals (prompt/completion) |
-| PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, memory_enabled?, timeout_ms?, guest_enabled?, guest_max_chats?, guest_max_minutes?, guest_purge_hour?}` | Update settings (budget 200–32000, reply cap 64–8192, timeout 30–600 s, guest chats 1–200, guest minutes 1–60, purge hour 0–23) |
+| PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, context_window?, memory_enabled?, timeout_ms?, guest_enabled?, guest_max_chats?, guest_max_minutes?, guest_purge_hour?, gen_limit_max?, gen_limit_window_sec?}` | Update settings (budget 200–32000, reply cap 64–16384, fallback context window 1024–1048576, timeout 30–600 s, guest chats 1–200, guest minutes 1–60, purge hour 0–23, gen limit 5–1000 calls / 10–600 s window) |
 | GET | `/api/admin/router-config` | - | Model gateway base URL + masked key + source (`database`/`env`) |
 | PUT | `/api/admin/router-config` | `{base_url?, api_key?}` | Set gateway base URL & API key (hot-reload, no restart; empty key = keep) |
 | POST | `/api/admin/router-test` | `{base_url?, api_key?}` | Probe `GET {base}/models` with saved **or** posted (pre-save) creds → latency + model count |
@@ -471,7 +492,8 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | `ERR_SELF_DEACTIVATE` | Cannot deactivate own account |
 | `ERR_BAD_BODY` | Malformed JSON body |
 | `ERR_BAD_BUDGET` | History budget out of range (200–32000) |
-| `ERR_BAD_MAXTOK` | Reply token cap out of range (64–8192) |
+| `ERR_BAD_MAXTOK` | Reply token cap out of range (64–16384) |
+| `ERR_BAD_CTXWIN` | Fallback context window out of range (1024–1048576) |
 | `ERR_BAD_TIMEOUT` | Upstream timeout out of range (30–600 s) |
 | `ERR_ROUTER_DOWN` | 9Router unreachable |
 | `ERR_ROUTER_NOT_CONFIGURED` | Base URL / API key not set yet (Admin Dashboard → Model Connection) |
@@ -493,22 +515,27 @@ users     (id, username, password_hash, role, daily_quota,
            model_override, avatar, active, created_at)
           -- password_hash: "scrypt1:<salt>:<hash>" (per-user salt);
           -- legacy static-salt hex auto-upgrades on next login
-sessions  (token, user_id, expires_at)             -- expired rows purged on login
-chats     (id, user_id, title, model, lean, pinned, archived, tag,
-           summary, created_at, updated_at)        -- lean: 1 = no-history token saver
+sessions  (token, user_id, expires_at, csrf_token)   -- expired rows purged on login; csrf_token used by the Dual-Mode CSRF guard
+chats     (id, user_id, title, model, lean, summary, summary_upto_id,
+           pinned, archived, tag, created_at, updated_at)
+          -- lean: 1 = no-history token saver; summary_upto_id = last message folded into the rolling summary
           -- pinned/archived: 0/1; tag: free text (<= 24 chars)
-messages  (id, chat_id, role, content, tokens, created_at)
-usage     (user_id, date, request_count, tokens_used)  -- PK (user_id, date)
+messages  (id, chat_id, role, content, tokens, meta, created_at)
+          -- meta: JSON reply-stats strip (time, tok/s, context %, prompt/completion/total tokens)
+usage     (user_id, date, request_count, tokens_used, prompt_tokens, completion_tokens)  -- PK (user_id, date)
+usage_events (date, hour, mode, model, reqs, tok)      -- ledger: every AI call by (day, hour, mode, model); powers all admin charts
 shared_chats (token, chat_id, user_id, created_at)
           -- token = 16 hex chars, random; read-only public snapshots; revoked on chat delete
-guest_sessions (token, guest_id, msgs_used, started_at, expires_at)
+guest_sessions (token, guest_id, expires_at, msgs_used, started_at, csrf_token)
           -- guest chats stored under user_id = -guest_id; wiped on logout / purge
 memories  (id, user_id, content, source, updated_at)  -- cross-chat facts (max 20/user)
+audit     (id, at, actor_id, actor, action, target, detail)  -- audit trail (max 2000 rows)
 settings  (key, value)
           -- keys: default_model, wallpaper, assistant_avatar, router_base, router_key,
-          --         user:<id>:wallpaper, history_token_budget, max_reply_tokens,
+          --         user:<id>:wallpaper, history_token_budget, max_reply_tokens, context_window,
           --         memory_enabled, timeout_ms, memory_sync_chat, memory:last:<id>,
-          --         guest_enabled, guest_max_chats, guest_max_minutes, guest_purge_hour
+          --         guest_enabled, guest_max_chats, guest_max_minutes, guest_purge_hour,
+          --         guest_last_purge_day, gen_limit_max, gen_limit_window_sec
 ```
 
 ---
@@ -525,6 +552,48 @@ For access over the internet, a Cloudflare Tunnel works out of the box:
 `trust proxy` is enabled and `cf-connecting-ip` is honored for login
 rate limiting; the session cookie gets the `Secure` flag automatically
 when the request arrives via HTTPS.
+
+---
+
+## Production Deploy (Docker, port 3001)
+
+The app is **dual-mode single-codebase**: the same `server.js` behaves as a relaxed
+dev server on `localhost` and as a hardened production server behind HTTPS. There is
+nothing to fork — production behavior is auto-selected at request time.
+
+| Signal | Effect |
+|---|---|
+| Request arrives via HTTPS (`X-Forwarded-Proto: https`) **or** host is the public tunnel domain | Cookies become `Secure` + `SameSite=Strict`, strict CORS whitelist + CSRF guard apply |
+| Request from `localhost` / `127.0.0.1` | Relaxed cookies (`SameSite=Lax`), CSRF bypassed, permissive CORS — smooth local dev |
+
+**Topology used here:** dev runs on the host (systemd, port 3000); production runs in
+Docker (port 3001). Both can run at once (~70–80 MB RAM total on an Intel i3), so
+public traffic on the tunnel is isolated from whatever you are editing on 3000.
+
+### One command
+
+```bash
+./manage.sh deploy
+```
+
+This copies the current app into `~/docker/teman_tanyamu/` (the master Docker config
+lives in the dev directory and is version-controlled), preserves the persistent
+`chat.db` volume, then builds the image (`node:24-alpine`, `npm ci --only=production`)
+and (re)starts the container mapped as `3001:3000`.
+
+### Wiring the tunnel
+
+Point a Cloudflare Tunnel (or any HTTPS reverse proxy) at `http://localhost:3001`.
+Because production is detected from `X-Forwarded-Proto`/host, no extra flags are needed —
+the cookie `Secure` flag and CSRF/CORS locks switch on automatically for tunnel traffic
+while `http://localhost:3000` (and `:3001`) stay reachable directly.
+
+### Production config
+
+`production.env` (copied into the Docker dir) carries production guidance and a dummy
+`ROUTER_KEY` placeholder — set the real gateway base URL + key from the running
+container's **Admin Dashboard → Model Connection** (DB settings win over env vars), so
+no secret is baked into the image.
 
 ---
 
@@ -545,8 +614,11 @@ when the request arrives via HTTPS.
 - Passwords: scrypt with per-user random salt, stored as `scrypt1:<salt>:<hash>`,
   verified with `crypto.timingSafeEqual`; legacy static-salt hashes upgrade
   automatically on the next successful login
-- Sessions: HttpOnly cookie, SameSite=Lax, 7-day expiry; expired rows purged on login
+- Sessions: HttpOnly cookie, `SameSite=Lax` in dev / `SameSite=Strict` in production, 7-day expiry; expired rows purged on login
 - **Secure cookie flag**: auto-enabled when behind HTTPS (Cloudflare Tunnel sets `X-Forwarded-Proto`)
+- **Dual-Mode CSRF guard**: production (HTTPS / tunnel host) requires a per-session CSRF token — the server mints it, ships it via `/api/me`, and the browser's global fetch interceptor echoes it on every mutating request; `localhost` bypasses it for frictionless dev
+- **CORS**: dynamic whitelist (localhost / 127.0.0.1 / the configured tunnel domain); everything else is rejected in production
+- **Rich replies sanitized**: AI Markdown is rendered through `DOMPurify` before it touches the DOM, so model output cannot inject script/HTML; external links are forced to `rel="noopener noreferrer"`
 - **Login rate limiting**: 5 failed attempts per IP, then a 2-minute block (`ERR_RATE_LIMITED`)
 - `trust proxy` enabled: client IP correctly detected behind Cloudflare (`CF-Connecting-IP`)
 - **Security headers** on every response: `X-Content-Type-Options: nosniff`,
@@ -581,20 +653,22 @@ when the request arrives via HTTPS.
 | Port already in use | `./manage.sh port 3001` |
 | Not auto-starting at boot | `./manage.sh enable-boot`, verify `loginctl show-user $USER \| grep Linger` |
 | Stale UI after update | Hard refresh: `Ctrl+Shift+R` (HTML/CSS/JS are all no-cache; rarely needed) |
+| Tables/code look unstyled after an update | The asset `?v=` version bumps on each release; if a proxy cached old CSS, hard-refresh (`Ctrl+F5`) and, if serving through Docker, redeploy (`./manage.sh deploy`) |
+| Rich Markdown not rendering (plain text) | Confirm `/vendor/marked.min.js` + `/vendor/purify.min.js` load (200, not 404); they are bundled locally — no CDN — so a missing `public/vendor/` file is the usual cause |
 | Full reset (nuclear) | `./manage.sh stop && rm -f chat.db* && ./manage.sh start` — all data gone |
 
 ---
 
 ### Night of Reliability (v1.0-beta.21 → .24)
-Fitur operasional level produksi:
-- **Backup otomatis**: tiap boot + harian ke `backups/` (retensi 30 hari), plus tombol "Back up database now" di panel **Sistem & Operasi** pada Admin Dashboard. CLI: `./manage.sh backup` / `restore <file>` / `vacuum`.
-- **Audit trail**: login, aksi admin, purge, share, rate-limit tercatat ke tabel `audit` (maks 2000 baris) dan tampil di panel Ops (paginated).
-- **Throttle generasi**: default 30 panggilan AI / 90 detik per user (tamu: per IP) → `ERR_GEN_LIMITED`; pembuatan sesi tamu 12/menit/IP. **Bisa disetel live** di Admin → Token Saver: "Anti-spam: maks panggilan AI" (5–1000) + "…per rentang detik" (10–600), tersimpan di settings, langsung berlaku tanpa restart, tercatat di audit trail.
-- **Log terstruktur JSON** (`lib/logger.js`) + request log API + endpoint `/api/admin/metrics` (Prometheus text, admin-only).
-- **Purge-day persisten**: guard hari purge sekarang disimpan di `settings` (`guest_last_purge_day`), aman restart, pakai tanggal lokal.
-- **Regression suite permanen**: `test/e2e.test.js` — 46 assertion (auth, isolasi chat, share+XSS+i18n, guard admin, limiter unit, metrics, backup, purge-route, mode ledger). Jalankan: `./manage.sh test` atau `npm test`.
-- **i18n bersama**: `public/i18n.js` dipakai browser DAN server (halaman share ikut bahasa `Accept-Language`).
-- **Throttle configurable (v1.0-beta.22)** — Admin → Token Saver: "Max calls" + "per seconds"
+Production-grade operational features:
+- **Automatic backups**: on every boot + daily to `backups/` (30-day retention), plus a "Back up database now" button in the **System & Operations** panel of the Admin Dashboard. CLI: `./manage.sh backup` / `restore <file>` / `vacuum`.
+- **Audit trail**: logins, admin actions, purges, shares and rate-limit hits are recorded to the `audit` table (max 2000 rows) and shown in the Ops panel (paginated).
+- **Generation throttle**: default 30 AI calls / 90 seconds per user (guests: per IP) → `ERR_GEN_LIMITED`; guest session creation 12/min/IP. **Live-configurable** in Admin → Token Saver: "Anti-spam: max AI calls" (5–1000) + "…per seconds window" (10–600), stored in settings, applied instantly without restart, recorded in the audit trail.
+- **Structured JSON logs** (`lib/logger.js`) + API request log + `/api/admin/metrics` endpoint (Prometheus text, admin-only).
+- **Persistent purge-day**: the purge-day guard is now stored in `settings` (`guest_last_purge_day`), restart-safe, using the local date.
+- **Permanent regression suite**: `test/e2e.test.js` — 50 assertions (auth, chat isolation, share+XSS+i18n, admin guards, limiter unit, metrics, backup, purge-route, mode ledger). Run: `./manage.sh test` or `npm test`.
+- **Shared i18n**: `public/i18n.js` is used by BOTH browser AND server (the share page follows the `Accept-Language` header).
+- **Configurable throttle (v1.0-beta.22)** — Admin → Token Saver: "Max calls" + "per seconds"
   side-by-side with an inline explainer note (5–1000 / 10–600); stored in settings, applied live
   without restart, audit-tracked.
 - **Motion layer (v1.0-beta.23 → .24)** — chat bubbles rise-in, history & audit rows stagger, stat
@@ -610,60 +684,81 @@ Fitur operasional level produksi:
   streamed & saved, you now get a soft "⚠ interrupted" note instead of the answer being replaced
   by an error; SSE heartbeat every 10 s prevents idle connection drops; server always emits
   `[DONE]` so the client never hangs.
-- **Ledger mode statistik (v1.0-beta.25)** — tabel baru `usage_events` mencatat SETIAP panggilan AI
-  per (hari, jam, mode, model) — mode normal/eco/temp/guest kini TERHITUNG SEMUA di kartu, chart
-  per-jam, per-model, dan blok baru "Requests by mode" (bar berwarna + keterangan cara catat;
-  historis normal+eco di-seed otomatis dari messages lama). Verified end-to-end: normal ✓ eco ✓
-  temp ✓ guest ✓. `Reset usage stats` sekarang menyapu kedua ledger (tidak ada ghost chart lagi).
-- **Purge guest chat fixed (v1.0-beta.25)** — tombol "Purge guest chat" selalu "failed": rute
-  `/api/admin/guest-purge-now` ternyata terdaftar SETELAH guard 404 SPA-fallback (regresi senyap
-  dari v17) → 404 ERR_NOT_FOUND. Blok dipindah sebelum guard; 2 assertion regresi baru ditambahkan
-  ke suite agar bug kelas "route after the 404 wall" tidak pernah balik lagi.
-- **Toast anchor aware (v1.0-beta.25)** — popup (purge, save settings, dsb.) kini dipusat ke dialog
-  yang sedang terbuka kalau ada (sebelumnya selalu ke `.main`, jadi terlihat mepet kiri saat panel
-  Admin aktif + sidebar maximize/minimize). Terukur off-center **0px** di kedua posisi sidebar.
-- **Poll admin anti-flicker (v1.0-beta.26)** — re-render statistik tiap 5 s dilewati kalau angkanya
-  sama (signature JSON + tema aktif), cascade animasi tidak replay terus-menerus.
-- **Long answers fixed (v1.0-beta.27–.29)** — "jawaban terpotong lalu berhenti" caused by two silent
-  killers: total 120 s hard timeout (killed healthy long streams) and the 1024-token reply cap.
-  Timeout is now an *idle* watchdog (bytes flowing = alive; only dead connections abort), max-reply
-  default raised to 4096 (slider up to 16384, live-apply), and a reply that still hits the cap shows
-  a soft hint "⚠ …max reply…" instead of dying quietly. Verified end-to-end: the user's exact
-  question "sejarah indonesia abad 15 - hari ini" streams 3 718 chars / 3 346 completion tokens, clean [DONE].
+- **Ledger-mode statistics (v1.0-beta.25)** — a new `usage_events` table records EVERY AI call
+  per (day, hour, mode, model) — normal/eco/temp/guest modes are now ALL counted in the cards, the
+  per-hour chart, the per-model chart, and a new "Requests by mode" block (colored bars + a note on
+  how each is recorded; historical normal+eco are auto-seeded from old messages). Verified end-to-end:
+  normal ✓ eco ✓ temp ✓ guest ✓. `Reset usage stats` now sweeps both ledgers (no more ghost charts).
+- **Purge guest chat fixed (v1.0-beta.25)** — the "Purge guest chat" button always "failed": the
+  `/api/admin/guest-purge-now` route was registered AFTER the SPA-fallback 404 guard (a silent
+  regression from v17) → 404 ERR_NOT_FOUND. The block was moved before the guard; 2 new regression
+  assertions were added to the suite so the "route after the 404 wall" bug class can never return.
+- **Toast anchor aware (v1.0-beta.25)** — popups (purge, save settings, etc.) are now centered on
+  the currently open dialog if any (previously always on `.main`, so they looked stuck to the left
+  when the Admin panel was open + the sidebar maximized/minimized). Measured off-center **0px** in
+  both sidebar positions.
+- **Admin poll anti-flicker (v1.0-beta.26)** — the 5 s statistics re-render is skipped when the
+  numbers are unchanged (JSON signature + active theme), so the animation cascade no longer replays
+  constantly.
+- **Long answers fixed (v1.0-beta.27–.29)** — "answer cut off then stopped" was caused by two silent
+  killers: a total 120 s hard timeout (killed healthy long streams) and the 1024-token reply cap.
+  The timeout is now an *idle* watchdog (bytes flowing = alive; only dead connections abort), the
+  max-reply default was raised to 4096 (slider up to 16384, live-apply), and a reply that still hits
+  the cap shows a soft hint "⚠ …max reply…" instead of dying quietly. Verified end-to-end: the
+  user's exact question "sejarah indonesia abad 15 - hari ini" streams 3,718 chars / 3,346 completion
+  tokens, clean [DONE].
 - **Composer border regression (v1.0-beta.27)** — the v23 global focus-glow leaked into the chat
   textarea and drew a ring around it; `#input-msg:focus` is explicitly borderless again, the composer
   keeps its subtle `:focus-within` highlight only. Measured: border 0px, shadow none, while typing.
-- **"Idle timeout" labels** — Timeout setting renamed (EN/ID) so admins understand it no longer
-  limits total answer length/time, only silent-stall detection.
+- **"Idle timeout" labels** — the Timeout setting was renamed (EN/ID) so admins understand it no
+  longer limits total answer length/time, only silent-stall detection.
 - **HOTFIX fatal (v1.0-beta.30)** — v29 left a ReferenceError in the client stream loop (`aborted`,
   a SERVER-side variable, leaked into `send()`): every AI chat died on the first chunk with
   "aborted is not defined", output invisible until refresh (the server finished & saved anyway).
-  Loop now breaks on `done` only; static regression assertion added to the suite (47 total) so
-  server-only identifiers in client reader loops can never ship again.
+  The loop now breaks on `done` only; a static regression assertion was added to the suite (47 total)
+  so server-only identifiers in client reader loops can never ship again.
 - **Reply Stats Strip (v1.0-beta.31-32)** — Open-WebUI-style meta chips under every finished answer
   (time, tok/s, context %, ↑ prompt / ↓ completion / ∑ total tokens) with ID/EN tooltips; persisted in the
   new `messages.meta` column so they survive refresh; live for temp & guest streams too; admin
   Token Saver gains a validated **Model context window** setting (`ERR_BAD_CTXWIN`). Suite now 50.
-- **Meta chip arrows swapped (v1.0-beta.32)** — ↑ = prompt sent, ↓ = reply received (chat/network
+- **Meta chip arrows swapped (v1.0-beta.32)** — ↑ = prompt sent, ↓ = reply received (the chat/network
   convention everyone reads intuitively; the old well-metaphor read backwards to users).
 - **Context window AUTO-DETECT per model (v1.0-beta.33)** — gateway `/v1/models` metadata
   (`context_length`, `max_completion_tokens`) is cached with the model list (plus an 8s-after-boot
   warm fetch) and feeds the ◔ chip live: each reply's % uses the window of the model that generated
   it (gemini-3.5-flash → 1.049k → 6.2k prompt = 1%, not the scary 50% of the old fixed 8k).
   Models without metadata (e.g. `auto-change` combo) fall back to the admin setting, now honestly
-  labelled **Fallback context window**; tooltip also shows the model's max output. Verified
+  labelled **Fallback context window**; the tooltip also shows the model's max output. Verified
   end-to-end on both paths; temp/guest streams included.
-- **Versi konsisten**: `package.json` `1.0.0-beta.33` = `APP_VERSION` server = cache-buster aset; git tag per rilis.
+- **Consistent versioning**: `package.json` version = server `APP_VERSION` = asset cache-buster; a git tag per release.
 
 ## Changelog
 
-### v1.0-beta.40 (latest)
+### v1.0-beta.47 (latest)
 
-- **Dual-Mode Security Suite** — Strict HTTPS Secure/SameSite=Lax cookie locks, robust database-driven CSRF token Guard (using automated frontend Global Fetch Interceptor), and strict CORS origin locks for production.
+- **GPT/Gemini-grade reply rendering** — AI answers are now parsed with bundled `marked` + `DOMPurify` (served from `/vendor/`, no CDN) for full Markdown: headings, ordered/unordered/nested lists, GFM task-list checkboxes, blockquotes, horizontal rules, inline formatting, and safe autolinked external links (`target="_blank"` + `rel="noopener noreferrer"`).
+- **Unified table grid** — Markdown tables render as one continuous, rounded grid (single collapsed border via a `.md-table-wrap` wrapper) with a header divider, zebra striping, row hover, and horizontal scroll on narrow screens — matching the ChatGPT/Gemini table look (no more separated per-cell borders).
+- **Code blocks with header bar** — each fenced block gets a header showing the language label + a copy button, syntax-highlighted by highlight.js; the copy button confirms with a bilingual "Copied/Tersalin" label.
+- **Clean message copy** — the per-message "Copy" action strips the injected code-header labels and streaming caret, so copied text is verbatim content (no stray "js Copy").
+- **Throttled streaming** — long/heavy replies (complex diagrams, code + prose) no longer freeze the tab: the renderer repaints at most ~every 80 ms during streaming with a single final flush, fixing O(n²) re-parsing.
+- **GPT-style streaming caret** — a blinking cursor trails the live reply while it streams, and disappears when the answer completes.
+- **Smart auto-scroll** — the view stops pinning to the bottom the moment you scroll up to read, and resumes following when you return to the bottom.
+- **Sidebar minimize fixes** — chat icons are centered when the sidebar is minimized, and clicking a chat icon or the account avatar performs its action instead of forcing the sidebar to expand.
+
+### v1.0-beta.43
+
+- **Token counter sync on login** — the composer token estimator no longer flashes a hardcoded `1.6k` before syncing; it reads the database-driven budget as soon as `/api/me` loads.
+- **Model-change confirmation** — changing the per-user model now asks for confirmation via a bilingual modal (Cancel reverts the dropdown to the previous model) instead of applying instantly.
+- **Welcome message on login** — the empty-state welcome message renders immediately after login (previously only appeared when triggered by the Temp Message button).
+- **Eco/Lean mode from the home screen** — the Eco (Lean) toggle can be activated before any chat room exists; a new chat inherits the chosen Lean state on first send.
+
+### v1.0-beta.40
+
+- **Dual-Mode Security Suite** — Strict HTTPS Secure/SameSite=Lax cookie locks, robust database-driven CSRF token Guard (using an automated frontend Global Fetch Interceptor), and strict CORS origin locks for production.
 - **Robust non-blocking models caching** — Wrapped upstream models fetching inside isolated catch-blocks, ensuring database settings populate instantly even if the gateway proxy is cold/down.
-- **Master Dockerization Stack** — Alpine-based Dockerfile, clean docker-compose ports mapping, and standalone `production.env` to run production at port 3001 coexisting safely alongside dev.
-- **One-Click Deploy script** — Integrated `./manage.sh deploy` to automate target directory creation, assets synchronization, persistent database migrations, and hot-docker building.
-- **Global Chat Search with Debounce** — Upgraded search to query SQLite backend, rendering gray search snippet previews under chat titles in the sidebar.
+- **Master Dockerization Stack** — Alpine-based Dockerfile, clean docker-compose port mapping, and a standalone `production.env` to run production on port 3001 coexisting safely alongside dev.
+- **One-Click Deploy script** — Integrated `./manage.sh deploy` to automate target directory creation, asset synchronization, persistent database migrations, and hot Docker building.
+- **Global Chat Search with Debounce** — Upgraded search to query the SQLite backend, rendering gray search-snippet previews under chat titles in the sidebar.
 - **Premium Chat Exporter** — Download chats as Markdown (including metadata headers), raw JSON arrays, or clean print-to-PDFs.
 - **Real-time Token Estimator** — Live token calculation in the composer with visual budget over-limit warnings and dynamic Lean/Eco mode binding.
 
