@@ -27,6 +27,11 @@ tmp_*.js
 *.tmp
 *.log
 
+# Local-only docs & skills (kept out of the public repo)
+antislop.md
+DESIGN.md
+skills/
+
 # Editor / OS junk
 .DS_Store
 .vscode/
