@@ -5,12 +5,13 @@ services:
     build: .
     container_name: teman_tanyamu_prod
     restart: always
+    # Secrets (SESSION_SECRET, ROUTER_KEY, ...) come from production.env — never hardcoded here.
+    # Copy production.env.example to production.env and fill in your own values.
+    env_file:
+      - production.env
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - SESSION_SECRET=REDACTED_SET_IN_production.env
-      # Upstream 9Router fallback gateway settings for initial bootstrap
-      - ROUTER_BASE=http://localhost:20128/v1
     volumes:
       # Persistent SQLite database mount to preserve all your chat histories and settings on restart
       - ./chat.db:/app/chat.db
