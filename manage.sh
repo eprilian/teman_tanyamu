@@ -216,7 +216,12 @@ cmd_deploy() {
   cp -rf "$APP_DIR/package-lock.json" "$target_dir/"
   cp -rf "$APP_DIR/Dockerfile" "$target_dir/"
   cp -rf "$APP_DIR/docker-compose.yml" "$target_dir/"
-  cp -rf "$APP_DIR/production.env" "$target_dir/"
+  if [[ -f "$APP_DIR/production.env" ]]; then
+    cp -rf "$APP_DIR/production.env" "$target_dir/"
+  else
+    warn "production.env not found — copy production.env.example to production.env and set your secrets first."
+    cp -rf "$APP_DIR/production.env.example" "$target_dir/production.env"
+  fi
   
   # 3) Salin folder aset pendukung
   mkdir -p "$target_dir/public" "$target_dir/lib"
