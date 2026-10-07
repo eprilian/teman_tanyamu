@@ -72,6 +72,13 @@ async function runSuite() {
   // regression (v29): server-only identifiers must never leak into the client stream loops
   const clientJs = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'app.js'), 'utf8');
   ok('client free of server-only vars', !/if\s*\(\s*done\s*\|\|\s*aborted\s*\)/.test(clientJs));
+  // regression (dsweb fix): reasoning stream path must survive — thinking must
+  // render (never dropped) and stay out of copies
+  ok('client handles reasoning stream', /chunk\.thinking/.test(clientJs) && /splitThink/.test(clientJs) && /paintStreamBubble/.test(clientJs));
+  ok('client copy strips reasoning', /\.m-think/.test(clientJs));
+  const serverJs = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.js'), 'utf8');
+  ok('relay forwards reasoning delta', serverJs.includes('delta.reasoning_content') && serverJs.includes('{ thinking:'));
+  ok('dsweb per-model reply cap', /maxReplyFor/.test(serverJs));
   ok('admin-only purge not for guests', (await j('/api/admin/guest-purge-now', { method: 'POST' })).status === 401);
 
   // ---------- create suite users via DB (no admin creds needed) ----------

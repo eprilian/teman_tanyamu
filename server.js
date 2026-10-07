@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.47';
+const APP_VERSION = '1.0-beta.48';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -508,6 +508,15 @@ function getTimeoutMs() {
   const n = Number(v);
   if (!Number.isFinite(n)) return 120000;
   return Math.min(600000, Math.max(30000, Math.round(n) * 1000));
+}
+
+// per-model reply cap (B4): dsweb/* rides a 128k-ctx / 64k-out backend, so the
+// global 4096 cap would slice long essays and look like a truncation bug.
+// Other providers keep the admin setting untouched.
+function maxReplyFor(model) {
+  const base = getSettingInt('max_reply_tokens', 4096);
+  if (String(model || '').startsWith('dsweb/')) return Math.max(base, 8000);
+  return base;
 }
 
 // Build model-bound history under a token budget:
@@ -1049,7 +1058,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
   const HISTORY_BUDGET = getSettingInt('history_token_budget', 1600); // ~window lama, tapi berdasarkan token
   const MODEL_INFO = ctxForModel(chat.model); // from gateway metadata when known
   const CONTEXT_WINDOW = MODEL_INFO.ctx || getSettingInt('context_window', 8192); // manual setting = fallback
-  const MAX_REPLY_TOKENS = getSettingInt('max_reply_tokens', 4096);  // cap output
+  const MAX_REPLY_TOKENS = maxReplyFor(chat.model);  // cap output (B4: dsweb floor 8000)
   const lean = !!chat.lean;
   const history = lean ? [] : buildHistory(chat.id, chat.summary_upto_id || 0, HISTORY_BUDGET);
   const systemPrompt = buildSystemPrompt(req.user, chat);
@@ -1066,6 +1075,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
   startSse(req, res);
 
   let aiReply = '';
+  let aiThinking = '';
   let tokens = 0;
   let promptTokens = 0;
   let completionTokens = 0;
@@ -1073,6 +1083,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
   res.on('close', () => { if (!res.writableEnded) aborted = true; });
 
   let truncated = false;
+  let sawCut = false;
   const t0 = Date.now(); let tFirst = 0; // wall-clock stream + first-token latency
   const idle = idleSignal(getTimeoutMs());
   try {
@@ -1109,8 +1120,18 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
         try {
           const chunk = JSON.parse(line.slice(6));
           if (!tFirst) tFirst = Date.now();
-          if (chunk.choices?.[0]?.finish_reason === 'length') truncated = true;
+          const fr = chunk.choices?.[0]?.finish_reason;
+          if (fr === 'length') truncated = true;
+          // ds2api reports honest ends: finish=error means the upstream stream
+          // was cut — surface it as a soft partial note, never silent success
+          if (fr === 'error') sawCut = true;
           const delta = chunk.choices?.[0]?.delta;
+          // B1: reasoning stream (dsweb/deepseek-reasoner THINK) — forward to the
+          // client instead of dropping it, and keep it for the DB row
+          if (delta && delta.reasoning_content) {
+            aiThinking += delta.reasoning_content;
+            res.write(`data: ${JSON.stringify({ thinking: delta.reasoning_content })}\n\n`);
+          }
           if (delta && delta.content) {
             aiReply += delta.content;
             // intercept vision-error responses mid-stream: replace with friendly note once
@@ -1134,8 +1155,11 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
       }
     }
 
-    if (aiReply) {
-      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out }));
+    if (aiReply || aiThinking) {
+      const savedContent = aiThinking
+        ? ('<think>\n' + aiThinking + '\n</think>\n\n' + aiReply)
+        : aiReply;
+      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', savedContent, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out }));
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chat.id);
       countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
       // background: refresh rolling summary + cross-chat memory (lean mode = no context, skip both)
@@ -1148,13 +1172,24 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
     }
     idle.done();
     if (truncated && aiReply) res.write(`data: ${JSON.stringify({ note: 'ERR_LENGTH' })}\n\n`);
+    // cut (finish=error) is a real truncation too — don't let the UI pretend it was clean
+    if (sawCut && (aiReply || aiThinking)) {
+      // reuse the quiet partial marker the client already knows; helps offline/reload paths too
+      const cutNote = aiReply ? '9Router/stream cut — partial reply saved' : '9Router/stream cut';
+      if (!truncated) res.write(`data: ${JSON.stringify({ partial: cutNote })}\n\n`);
+    }
     res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out } })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
     idle.done();
-    if (aiReply) {
-      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', aiReply, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out }));
+    // B1: if thinking was already streamed, include it in the saved content
+    const hasPartial = !!(aiReply || aiThinking);
+    const savedContent = hasPartial
+      ? (aiThinking ? ('<think>\n' + aiThinking + '\n</think>\n\n' + aiReply) : aiReply)
+      : '';
+    if (hasPartial) {
+      db.prepare('INSERT INTO messages (chat_id, role, content, tokens, meta) VALUES (?, ?, ?, ?, ?)').run(chat.id, 'assistant', savedContent, tokens, JSON.stringify({ p: promptTokens, c: completionTokens, t: tokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out }));
       countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'normal'), chat.model);
     }
     const friendly = e.code === 'ERR_ROUTER_NOT_CONFIGURED' ? e.code
@@ -1162,7 +1197,7 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
         ? 'ERR_TIMEOUT' // includes idle-stream watchdog firing
         : ('9Router/failed: ' + (e.message || 'unknown error')).slice(0, 300);
     // reply already streamed & saved -> soft 'partial' note; never erase what the user can see
-    if (aiReply && !aborted) res.write(`data: ${JSON.stringify({ partial: friendly })}\n\n`);
+    if (hasPartial && !aborted) res.write(`data: ${JSON.stringify({ partial: friendly })}\n\n`);
     else if (!aborted) res.write(`data: ${JSON.stringify({ error: friendly })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
@@ -1220,6 +1255,9 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
   const MODEL_INFO = ctxForModel(effectiveModel);
   const CONTEXT_WINDOW = MODEL_INFO.ctx || getSettingInt('context_window', 8192);
   let aiTempReply = '';
+  let aiTempThinking = '';
+  let tempTruncated = false;
+  let tempCut = false;
   let aborted = false;
   res.on('close', () => { if (!res.writableEnded) aborted = true; });
 
@@ -1236,7 +1274,7 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
         model: effectiveModel,
         messages,
         stream: true,
-        max_tokens: getSettingInt('max_reply_tokens', 4096)
+        max_tokens: maxReplyFor(effectiveModel) // B4: dsweb floor 8000
       }),
       signal: idle.signal
     });
@@ -1263,7 +1301,14 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
         try {
           const chunk = JSON.parse(line.slice(6));
           if (!tFirst) tFirst = Date.now();
+          const fr = chunk.choices?.[0]?.finish_reason;
+          if (fr === 'length') tempTruncated = true;
+          if (fr === 'error') tempCut = true;
           const delta = chunk.choices?.[0]?.delta;
+          if (delta && delta.reasoning_content) {
+            aiTempThinking = (aiTempThinking || '') + delta.reasoning_content;
+            res.write(`data: ${JSON.stringify({ thinking: delta.reasoning_content })}\n\n`);
+          }
           if (delta && delta.content) {
             aiTempReply = (aiTempReply || '') + delta.content;
             if (/Cannot read\s+"/.test(aiTempReply) || /does not support image input/.test(aiTempReply)) {
@@ -1281,6 +1326,11 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
     }
     idle.done();
     countRequest(req.user, tokens, promptTokens, completionTokens, req.guest ? 'guest' : (lean ? 'eco' : 'temp'), effectiveModel);
+    if (tempTruncated && aiTempReply) res.write(`data: ${JSON.stringify({ note: 'ERR_LENGTH' })}\n\n`);
+    if (tempCut && (aiTempReply || aiTempThinking)) {
+      // cut stream in a no-save route: still surface it so the UI doesn't pretend it was clean
+      if (!tempTruncated) res.write(`data: ${JSON.stringify({ partial: '9Router/stream cut — partial reply shown' })}\n\n`);
+    }
     res.write(`data: ${JSON.stringify({ usage: { total: tokens, prompt: promptTokens, completion: completionTokens, ms: Date.now() - t0, tt: tFirst ? tFirst - t0 : 0, ctx: CONTEXT_WINDOW, out: MODEL_INFO.out } })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();

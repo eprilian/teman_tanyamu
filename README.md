@@ -11,7 +11,7 @@
 | **Frontend** | `index.html` + `style.css` + `app.js`, zero framework, dark theme |
 | **Rich replies** | GPT/Gemini-grade Markdown via bundled `marked` + `DOMPurify` (tables, lists, code, blockquotes) |
 | **Language** | English (default) / Indonesian — runtime toggle |
-| **Version** | v1.0-beta.47 |
+| **Version** | v1.0-beta.48 |
 | **License** | Private / personal use |
 
 ---
@@ -27,7 +27,7 @@
 | **Admin — Usage Statistics** — stat cards, requests-by-mode, per-hour chart | ![Admin statistics](docs/screenshots/05-admin-stats.png) |
 | **Account Settings** — avatar, password, cross-chat memory | ![Account settings](docs/screenshots/06-account-settings.png) |
 
-> Screenshots are captured on the dark theme at v1.0-beta.47. Sample chat content shown is illustrative.
+> Screenshots are captured on the dark theme at v1.0-beta.48. Sample chat content shown is illustrative.
 
 ---
 
@@ -750,7 +750,13 @@ Production-grade operational features:
 
 ## Changelog
 
-### v1.0-beta.47 (latest)
+### v1.0-beta.48 (latest)
+
+- **dsweb truncation fix (reasoning + finish reasons)** — `dsweb/deepseek-reasoner` THINK fragments no longer vanish: the relay forwards `reasoning_content` as a separate stream event, the UI shows it in a collapsible "thinking" block above the answer (never merged into the reply, stripped from copies), and it is stored in the DB as a `<think>…</think>` prefix so history survives reload. Honest stream ends: `finish=length` paints the ERR_LENGTH note, `finish=error` (cut upstream) paints a soft "partial reply" note instead of pretending success — on both `/api/chat` and `/api/temp-chat`.
+- **dsweb per-model reply cap** — `dsweb/*` gets `max_tokens` floor 8000 (128k-ctx/64k-out backend) instead of the global 4096, so long essays no longer cut off at the cap and get misfiled as a truncation bug. Other providers keep the admin setting untouched.
+- **4 new regression guards** in `test/e2e.test.js` — client reasoning path (`chunk.thinking`/`splitThink`/`paintStreamBubble`), copy-strips-reasoning (`.m-think`), server forwards `reasoning_content`, dsweb per-model cap helper.
+
+### v1.0-beta.47
 
 - **GPT/Gemini-grade reply rendering** — AI answers are now parsed with bundled `marked` + `DOMPurify` (served from `/vendor/`, no CDN) for full Markdown: headings, ordered/unordered/nested lists, GFM task-list checkboxes, blockquotes, horizontal rules, inline formatting, and safe autolinked external links (`target="_blank"` + `rel="noopener noreferrer"`).
 - **Unified table grid** — Markdown tables render as one continuous, rounded grid (single collapsed border via a `.md-table-wrap` wrapper) with a header divider, zebra striping, row hover, and horizontal scroll on narrow screens — matching the ChatGPT/Gemini table look (no more separated per-cell borders).

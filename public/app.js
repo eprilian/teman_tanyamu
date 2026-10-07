@@ -295,15 +295,37 @@ function appendCaret(bubble) {
   else if (last) last.appendChild(caret);
   else bubble.appendChild(caret);
 }
-function renderStreamThrottled(bubble, text, box) {
+// ---------- reasoning (think) blocks ----------
+// dsweb/deepseek-reasoner streams THINK fragments separately from the answer.
+// They render as a collapsible block above the reply (ChatGPT/Gemini style),
+// never merged into the answer text, and stripped from copies.
+function splitThink(content) {
+  const m = /^<think>\n?([\s\S]*?)\n?<\/think>\n*/.exec(String(content || ''));
+  if (!m) return { think: '', rest: String(content || '') };
+  return { think: m[1], rest: String(content || '').slice(m[0].length) };
+}
+function thinkHTML(think, streaming) {
+  if (!think) return '';
+  const label = (typeof t === 'function') ? t('thinking_label') : 'thinking...';
+  return `<details class="m-think"${streaming ? ' open' : ''}><summary>${esc(label)}</summary><div class="m-think-body">${esc(think)}</div></details>`;
+}
+function paintStreamBubble(bubble, think, text, box, final) {
+  if (!bubble) return;
+  let html = thinkHTML(think, !final);
+  if (text) html += renderMarkdown(text);
+  else if (!think) { bubble.innerHTML = renderMarkdown(text); if (!final) appendCaret(bubble); if (box && isNearBottom(box)) box.scrollTop = box.scrollHeight; return; }
+  else html += '<span class="typing-dots"><span></span><span></span><span></span></span>';
+  const stick = isNearBottom(box);
+  bubble.innerHTML = html;
+  if (!final) appendCaret(bubble);
+  if (box && stick) box.scrollTop = box.scrollHeight;
+}
+function renderStreamThrottled(bubble, text, box, think) {
   const now = performance.now();
   const paint = () => {
     _streamRAF = 0;
     _streamLast = performance.now();
-    const stick = isNearBottom(box);
-    bubble.innerHTML = renderMarkdown(text);
-    appendCaret(bubble);
-    if (box && stick) box.scrollTop = box.scrollHeight;
+    paintStreamBubble(bubble, think, text, box, false);
   };
   if (now - _streamLast >= 80) { paint(); return; }
   if (_streamRAF) return;
@@ -312,11 +334,9 @@ function renderStreamThrottled(bubble, text, box) {
     else { _streamRAF = 0; }
   });
 }
-function flushStreamRender(bubble, text, box) {
+function flushStreamRender(bubble, text, box, think) {
   if (_streamRAF) { cancelAnimationFrame(_streamRAF); _streamRAF = 0; }
-  const stick = isNearBottom(box);
-  bubble.innerHTML = renderMarkdown(text); // final paint: no caret
-  if (box && stick) box.scrollTop = box.scrollHeight;
+  paintStreamBubble(bubble, think, text, box, true); // final paint: no caret
 }
 
 // Configure marked once (GPT/Gemini parity: GFM tables, autolinks, line breaks).
@@ -1540,11 +1560,17 @@ function messageHTML(role, content, streaming, mid, prevUserId) {
   const saved = !!mid; // temp-chat bubbles have no DB id -> no edit/truncate actions
   const meta = !isUser && !streaming && messageHTML._meta ? metaChipsHTML(messageHTML._meta) : '';
   messageHTML._meta = null;
+  // B1: saved assistant rows may carry a <think>…</think> prefix (reasoner) —
+  // show it as a collapsible block, never as raw tags in the answer
+  const thinkParts = (!isUser && !streaming) ? splitThink(content) : { think: '', rest: content };
+  const bodyHTML = streaming && !content
+    ? '<span class="typing-dots"><span></span><span></span><span></span></span>'
+    : (isUser ? esc(content) : thinkHTML(thinkParts.think, false) + renderMarkdown(thinkParts.rest));
   return `<div class="msg-block ${isUser ? 'user' : 'ai'}" ${saved ? `data-msg="${mid}"` : ''}>
     <div class="m-avatar">${isUser ? userAva : aiAvatar}</div>
     <div class="m-body">
       <div class="m-role">${isUser ? esc(t('you')) : esc(t('assistant'))}</div>
-      <div class="m-content ${streaming ? 'stream-target' : ''}">${streaming && !content ? '<span class="typing-dots"><span></span><span></span><span></span></span>' : (isUser ? esc(content) : renderMarkdown(content))}</div>
+      <div class="m-content ${streaming ? 'stream-target' : ''}">${bodyHTML}</div>
       ${isUser && saved && !streaming ? `<div class="m-actions">
         <button data-edit="${mid}">${ICON_EDIT} ${esc(t('edit_msg'))}</button>
       </div>` : ''}
@@ -1576,9 +1602,9 @@ document.addEventListener('click', async (e) => {
     const body = copyBtn.closest('.m-body');
     const content = body.querySelector('.m-content');
     if (content) {
-      // clone & strip injected code-head labels ("js Copy") so the copied text is clean
+      // clone & strip injected code-head labels ("js Copy"), stream caret, and reasoning blocks
       const clone = content.cloneNode(true);
-      clone.querySelectorAll('.code-head, .stream-caret').forEach(n => n.remove());
+      clone.querySelectorAll('.code-head, .stream-caret, .m-think').forEach(n => n.remove());
       await navigator.clipboard.writeText(clone.textContent.trim());
       const lbl = copyBtn.querySelector('.mact-label');
       if (lbl) { const old = lbl.textContent; lbl.textContent = t('copied_short'); setTimeout(() => { lbl.textContent = old; }, 1200); }
@@ -1761,6 +1787,7 @@ async function sendTemp(text) {
     let lastUsage = null;
     let buffer = '';
     const bubble = getStreamBubble(box);
+    let streamThink = '';
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -1772,16 +1799,23 @@ async function sendTemp(text) {
         try {
           const chunk = JSON.parse(line.slice(6));
           if (chunk.error) throw new Error(chunk.error);
+          if (chunk.note === 'ERR_LENGTH') { noteStreamInterrupt(bubble, 'ERR_LENGTH'); continue; } // temp route has no silent refresh: direct note is enough (don't arm pendingNote)
           if (chunk.partial) { noteStreamInterrupt(bubble, chunk.partial); continue; }
           if (chunk.usage) { lastUsage = chunk.usage; continue; }
+          // B1: reasoning stream before the answer (dsweb/deepseek-reasoner)
+          if (chunk.thinking) {
+            streamThink += chunk.thinking;
+            renderStreamThrottled(bubble, aiText, box, streamThink);
+            continue;
+          }
           if (chunk.content) {
             aiText += chunk.content;
-            renderStreamThrottled(bubble, aiText, box);
+            renderStreamThrottled(bubble, aiText, box, streamThink);
           }
         } catch (e) { if (e.message && !e.message.includes('JSON')) throw e; }
       }
     }
-    if (bubble) flushStreamRender(bubble, aiText, box);
+    if (bubble) flushStreamRender(bubble, aiText, box, streamThink);
     if (lastUsage && bubble) {
       const el = document.createElement('div');
       el.innerHTML = metaChipsHTML(lastUsage);
@@ -1880,6 +1914,7 @@ async function send() {
     let buffer = '';
     const bubble = getStreamBubble(box);
     pendingNote = null;
+    let streamThink = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1894,15 +1929,20 @@ async function send() {
           if (chunk.error) throw new Error(chunk.error);
           if (chunk.partial) { interruptNote = chunk.partial; noteStreamInterrupt(bubble, chunk.partial); continue; } // reply saved & visible: soft note only
           if (chunk.note === 'ERR_LENGTH') { const n = { why: 'ERR_LENGTH', until: Date.now() + 15000 }; pendingNote = n; interruptNote = 'ERR_LENGTH'; noteStreamInterrupt(bubble, 'ERR_LENGTH'); continue; } // cap hit: note survives route re-render + racing silent refresh
+          if (chunk.thinking) {
+            streamThink += chunk.thinking;
+            renderStreamThrottled(bubble, aiText, box, streamThink);
+            continue;
+          }
           if (chunk.usage) { lastUsage = chunk.usage; continue; }
           if (chunk.content) {
             aiText += chunk.content;
-            renderStreamThrottled(bubble, aiText, box);
+            renderStreamThrottled(bubble, aiText, box, streamThink);
           }
         } catch (e) { if (e.message && !e.message.includes('JSON')) throw e; }
       }
     }
-    if (bubble) flushStreamRender(bubble, aiText, box);
+    if (bubble) flushStreamRender(bubble, aiText, box, streamThink);
     if (lastUsage && bubble) {
       bubble.classList.remove('stream-target');
       const el = document.createElement('div');
