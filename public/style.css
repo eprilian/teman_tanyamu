@@ -493,6 +493,17 @@ body.light .stat-card.c-pink { border-left-color: #db2777; } body.light .stat-ca
 .router-result { margin-top: 8px; font-size: 11.5px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--elev); word-break: break-word; }
 .router-result.rr-ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 8%, var(--elev)); }
 .router-result.rr-bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, var(--elev)); }
+.prov-type { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border); text-transform: lowercase; }
+.prov-type.openai { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, var(--border)); }
+.prov-type.anthropic { color: #d97757; border-color: color-mix(in srgb, #d97757 40%, var(--border)); }
+.prov-toggle { position: relative; width: 40px; height: 22px; border-radius: 20px; border: 1px solid var(--border); background: var(--elev); cursor: pointer; padding: 0; }
+.prov-toggle .knob { position: absolute; top: 1px; left: 1px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: left 150ms, background 150ms; }
+.prov-toggle[aria-checked="true"] { background: color-mix(in srgb, var(--success) 25%, var(--elev)); border-color: var(--success); }
+.prov-toggle[aria-checked="true"] .knob { left: 19px; background: var(--success); }
+.provider-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.provider-form input, .provider-form select { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; color: var(--text); }
+.prov-base { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+.admin-table .row-btn { margin-right: 4px; }
 .model-combo.combo-stretch > .model-combo-btn { flex: 1; min-width: 0; }
 .admin-table .model-combo { width: 100%; }
 .admin-table .model-combo > .model-combo-btn { width: 100%; min-width: 0; }

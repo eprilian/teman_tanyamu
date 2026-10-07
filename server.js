@@ -7,7 +7,7 @@ const fs = require('fs');
 const dns = require('node:dns/promises');
 
 // #9: the single source of truth for the app version (git tags point here too)
-const APP_VERSION = '1.0-beta.48';
+const APP_VERSION = '1.0-beta.49';
 
 // Model gateway config lives in the settings table (editable in Admin Dashboard).
 // Env vars ROUTER_BASE / ROUTER_KEY act as boot fallback only (used when DB is empty).
@@ -372,6 +372,123 @@ function routerConfigured() {
   return Boolean(getRouterBase() && getRouterKey());
 }
 
+// ---------- multi-provider (OpenAI + Anthropic endpoints) ----------
+// providers table mirrors the legacy router_base/router_key settings:
+// - GET/PUT /api/admin/router-config stays the legacy alias for provider 'Default'
+// - chat routing: enabled provider with highest priority whose name-prefix
+//   matches chat.model ("prefix/nama"), fallback to 'Default', then legacy settings
+function listProviders(masked) {
+  let rows = [];
+  try { rows = db.prepare('SELECT id,name,type,base_url,enabled,priority,created_at,updated_at FROM providers ORDER BY priority DESC, id ASC').all(); } catch (_) { rows = []; }
+  if (!rows.length) {
+    // TABLE-EMPTY fallback: behave as single-provider legacy (backward compat 100%)
+    const base = getRouterBase() || '', key = getRouterKey() || '';
+    return [{ id: 0, name: 'Default', type: 'openai', base_url: base, api_key_masked: maskKey(key), enabled: (base && key) ? 1 : 0, priority: 0, legacy: true }];
+  }
+  if (masked) rows = rows.map((p) => ({ id: p.id, name: p.name, type: p.type, base_url: p.base_url || '', api_key_masked: maskKey(getProviderKey(p.id)), enabled: p.enabled ? 1 : 0, priority: p.priority || 0 }));
+  return rows;
+}
+function getProviderById(id) {
+  try { return db.prepare('SELECT * FROM providers WHERE id = ?').get(id) || null; } catch (_) { return null; }
+}
+function getProviderByName(name) {
+  try { return db.prepare('SELECT * FROM providers WHERE name = ?').get(name) || null; } catch (_) { return null; }
+}
+function getProviderKey(id) {
+  const p = getProviderById(id);
+  return p ? (p.api_key || '') : '';
+}
+// sync legacy settings when provider 'Default' changes (keeps old frontend + mobile working)
+function syncLegacyFromDefault() {
+  try {
+    const d = getProviderByName('Default');
+    if (!d) return;
+    if (d.base_url) setSetting('router_base', String(d.base_url));
+    if (d.api_key) setSetting('router_key', String(d.api_key));
+  } catch (_) {}
+}
+// pick provider for a model id "prefix/nama": highest-priority enabled provider
+// whose name is a case-insensitive prefix of the model id; fallback chain:
+// exact-prefix -> 'Default' provider -> legacy settings (id 0, openai)
+function providerForModel(modelId) {
+  const mid = String(modelId || '');
+  const prefix = mid.includes('/') ? mid.split('/')[0].toLowerCase() : '';
+  let rows = [];
+  try { rows = db.prepare("SELECT * FROM providers WHERE enabled = 1 AND type IN ('openai','anthropic') ORDER BY priority DESC, id ASC").all(); } catch (_) { rows = []; }
+  if (!rows.length) return { id: 0, name: 'Default', type: 'openai', base_url: getRouterBase() || '', api_key: getRouterKey() || '', legacy: true };
+  if (prefix) {
+    const hit = rows.find((p) => String(p.name || '').toLowerCase() === prefix);
+    if (hit) return hit;
+  }
+  const dflt = rows.find((p) => String(p.name || '').toLowerCase() === 'default');
+  if (dflt) return dflt;
+  return rows[0];
+}
+// direct fetch against ONE provider (no gateway routing): openai passes through,
+// anthropic converts payload <-> SSE so the client stream format never changes
+async function providerFetch(provider, pathname, opts = {}) {
+  const base = String(provider.base_url || '').replace(/\/+$/, '');
+  const key = provider.api_key || '';
+  if (!base || !key) { const e = new Error('provider-not-configured'); e.code = 'ERR_ROUTER_NOT_CONFIGURED'; throw e; }
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (provider.type === 'anthropic') {
+    headers['x-api-key'] = key;
+    headers['anthropic-version'] = '2023-06-01';
+  } else {
+    headers['Authorization'] = 'Bearer ' + key;
+  }
+  return fetch(base + pathname, { ...opts, headers });
+}
+// OpenAI chat payload -> Anthropic /v1/messages payload
+function openAIToAnthropic(payload) {
+  const msgs = Array.isArray(payload.messages) ? payload.messages : [];
+  let system = '';
+  const conv = [];
+  for (const m of msgs) {
+    const role = m.role === 'assistant' ? 'assistant' : 'user';
+    let text = '';
+    if (typeof m.content === 'string') text = m.content;
+    else if (Array.isArray(m.content)) text = m.content.map((c) => (typeof c === 'string' ? c : (c.text || c.content || ''))).filter(Boolean).join('\n');
+    else text = String(m.content == null ? '' : m.content);
+    if (m.role === 'system') { system += (system ? '\n' : '') + text; continue; }
+    conv.push({ role, content: text });
+  }
+  const out = { model: String(payload.model || '').includes('/') ? String(payload.model).split('/').slice(1).join('/') : String(payload.model || ''), max_tokens: payload.max_tokens || 1024, messages: conv.length ? conv : [{ role: 'user', content: '' }] };
+  if (system) out.system = system;
+  if (payload.stream) out.stream = true;
+  return out;
+}
+// Anthropic SSE event (data: {...type...}) -> OpenAI chunk {choices:[{delta:{content}}]}
+function anthropicEventToOpenAI(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  if (ev.type === 'content_block_delta' && ev.delta && typeof ev.delta.text === 'string') {
+    return { choices: [{ delta: { content: ev.delta.text }, finish_reason: null }] };
+  }
+  if (ev.type === 'message_delta' && ev.delta && ev.delta.stop_reason) {
+    const fr = ev.delta.stop_reason === 'max_tokens' ? 'length' : (ev.delta.stop_reason === 'end_turn' || ev.delta.stop_reason === 'stop_sequence' ? 'stop' : 'stop');
+    return { choices: [{ delta: {}, finish_reason: fr }] };
+  }
+  if (ev.type === 'message_stop') return { choices: [{ delta: {}, finish_reason: 'stop' }] };
+  return null; // message_start / content_block_start / ping: no text yet
+}
+// upstream chat call honoring provider type. Returns { resp, anthropic } where
+// anthropic=true means the SSE body speaks Anthropic events (caller converts).
+async function callProvider(provider, openAIPayload, signal) {
+  if (!provider || provider.type !== 'anthropic') {
+    const resp = await providerFetch(provider, '/chat/completions', { method: 'POST', body: JSON.stringify(openAIPayload), signal });
+    return { resp, anthropic: false };
+  }
+  const r = await providerFetch(provider, '/v1/messages', { method: 'POST', body: JSON.stringify(openAIToAnthropic(openAIPayload)), signal });
+  return { resp: r, anthropic: true };
+}
+// anthropic non-stream JSON -> OpenAI JSON (so nonStreamChat callers stay untouched)
+function anthropicJSONToOpenAI(j) {
+  const blocks = (j && Array.isArray(j.content)) ? j.content : [];
+  const text = blocks.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('');
+  const fr = j && j.stop_reason === 'max_tokens' ? 'length' : 'stop';
+  return { choices: [{ message: { role: 'assistant', content: text }, finish_reason: fr }], usage: j && j.usage ? { prompt_tokens: j.usage.input_tokens || 0, completion_tokens: j.usage.output_tokens || 0, total_tokens: (j.usage.input_tokens || 0) + (j.usage.output_tokens || 0) } : undefined };
+}
+
 // ---------- guest mode ----------
 const GUEST_MIN = 1; const GUEST_MAX = 200;
 function guestEnabled() { return getSetting('guest_enabled') === '1'; }
@@ -572,13 +689,11 @@ function saveMemoryList(user, facts) {
 }
 
 async function nonStreamChat(model, messages, maxTokens, timeoutMs) {
-  const r = await routerFetch('/chat/completions', {
-    method: 'POST',
-    body: JSON.stringify({ model, messages, stream: false, max_tokens: maxTokens }),
-    signal: AbortSignal.timeout(timeoutMs)
-  });
+  const prov = providerForModel(model); // multi-provider: title/summary/memory follow chat routing
+  const { resp: r, anthropic: isAnthropic } = await callProvider(prov, { model, messages, stream: false, max_tokens: maxTokens }, AbortSignal.timeout(timeoutMs));
   if (!r.ok) throw new Error('upstream ' + r.status);
-  const j = await r.json();
+  let j = await r.json();
+  if (isAnthropic) j = anthropicJSONToOpenAI(j);
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
 }
 
@@ -1087,16 +1202,13 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
   const t0 = Date.now(); let tFirst = 0; // wall-clock stream + first-token latency
   const idle = idleSignal(getTimeoutMs());
   try {
-    const upstream = await routerFetch('/chat/completions', {
-      method: 'POST',
-      body: JSON.stringify({
-        model: chat.model,
-        messages: [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: cleanMessage }],
-        stream: true,
-        max_tokens: MAX_REPLY_TOKENS
-      }),
-      signal: idle.signal
-    });
+    const prov = providerForModel(chat.model); // multi-provider: prefix match, else Default/legacy
+    const { resp: upstream, anthropic: isAnthropic } = await callProvider(prov, {
+      model: chat.model,
+      messages: [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: cleanMessage }],
+      stream: true,
+      max_tokens: MAX_REPLY_TOKENS
+    }, idle.signal);
 
     if (!upstream.ok) {
       const errText = await upstream.text();
@@ -1118,7 +1230,8 @@ app.post('/api/chat', requireAuth, requireGenLimit, async (req, res) => {
       for (const line of lines) {
         if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
         try {
-          const chunk = JSON.parse(line.slice(6));
+          let chunk = JSON.parse(line.slice(6));
+          if (isAnthropic) { chunk = anthropicEventToOpenAI(chunk); if (!chunk) continue; }
           if (!tFirst) tFirst = Date.now();
           const fr = chunk.choices?.[0]?.finish_reason;
           if (fr === 'length') truncated = true;
@@ -1268,16 +1381,13 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
 
   const idle = idleSignal(getTimeoutMs());
   try {
-    const upstream = await routerFetch('/chat/completions', {
-      method: 'POST',
-      body: JSON.stringify({
-        model: effectiveModel,
-        messages,
-        stream: true,
-        max_tokens: maxReplyFor(effectiveModel) // B4: dsweb floor 8000
-      }),
-      signal: idle.signal
-    });
+    const prov = providerForModel(effectiveModel); // multi-provider: prefix match, else Default/legacy
+    const { resp: upstream, anthropic: isAnthropic } = await callProvider(prov, {
+      model: effectiveModel,
+      messages,
+      stream: true,
+      max_tokens: maxReplyFor(effectiveModel) // B4: dsweb floor 8000
+    }, idle.signal);
 
     if (!upstream.ok) {
       const errText = await upstream.text();
@@ -1299,7 +1409,8 @@ app.post('/api/temp-chat', requireAuth, requireGenLimit, async (req, res) => {
       for (const line of lines) {
         if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
         try {
-          const chunk = JSON.parse(line.slice(6));
+          let chunk = JSON.parse(line.slice(6));
+          if (isAnthropic) { chunk = anthropicEventToOpenAI(chunk); if (!chunk) continue; }
           if (!tFirst) tFirst = Date.now();
           const fr = chunk.choices?.[0]?.finish_reason;
           if (fr === 'length') tempTruncated = true;
@@ -1503,7 +1614,166 @@ app.put('/api/admin/router-config', requireAuth, requireAdmin, async (req, res) 
     }
   }
   invalidateModelsCache(); // new gateway -> refetch list next call
+  // mirror into provider 'Default' so the legacy alias and the provider table never diverge
+  try {
+    const d = getProviderByName('Default');
+    if (d) {
+      const nb = getRouterBase(), nk = getRouterKey();
+      db.prepare("UPDATE providers SET base_url = ?, api_key = ?, updated_at = datetime('now') WHERE id = ?").run(nb, nk, d.id);
+    }
+  } catch (_) { /* provider table absent -> legacy-only mode */ }
   res.json({ ok: true, base_url: getRouterBase() || '', api_key_masked: maskKey(getRouterKey()), configured: routerConfigured() });
+});
+
+// ---------- admin: multi-provider CRUD (OpenAI + Anthropic endpoints) ----------
+function sanitizeProviderBody(b) {
+  const out = {};
+  if (b.name !== undefined) out.name = String(b.name || '').trim().slice(0, 64);
+  if (b.type !== undefined) out.type = String(b.type || '').trim().toLowerCase();
+  if (b.base_url !== undefined) out.base_url = String(b.base_url || '').trim().replace(/\/+$/, '').slice(0, 500);
+  if (b.api_key !== undefined) out.api_key = (b.api_key === null || b.api_key === '') ? '' : String(b.api_key).trim();
+  if (b.priority !== undefined) out.priority = Number(b.priority);
+  if (b.enabled !== undefined) out.enabled = b.enabled ? 1 : 0;
+  return out;
+}
+app.get('/api/admin/providers', requireAuth, requireAdmin, (req, res) => {
+  res.json(listProviders(true));
+});
+app.post('/api/admin/providers', requireAuth, requireAdmin, async (req, res) => {
+  const b = sanitizeProviderBody(req.body || {});
+  if (!b.name) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
+  if (b.type !== 'openai' && b.type !== 'anthropic') return res.status(400).json({ error: 'ERR_BAD_TYPE' });
+  if (!b.base_url) return res.status(400).json({ error: 'ERR_BASE_REQUIRED' });
+  const bad = await validateRouterBase(b.base_url);
+  if (bad) return res.status(400).json({ error: bad });
+  if (!b.api_key || b.api_key.length < 8) return res.status(400).json({ error: 'ERR_KEY_SHORT' });
+  if (b.api_key.length > 400) return res.status(400).json({ error: 'ERR_TOO_BIG' });
+  try {
+    const r = db.prepare('INSERT INTO providers (name,type,base_url,api_key,enabled,priority) VALUES (?,?,?,?,?,?)')
+      .run(b.name, b.type, b.base_url, b.api_key, 1, Number.isFinite(b.priority) ? Math.round(b.priority) : 0);
+    if (b.name.toLowerCase() === 'default') syncLegacyFromDefault();
+    invalidateModelsCache();
+    audit(req.user, 'provider_add', b.name, 'type=' + b.type);
+    res.json({ ok: true, id: Number(r.lastInsertRowid) });
+  } catch (e) {
+    if (String(e.message || '').includes('UNIQUE')) return res.status(400).json({ error: 'ERR_NAME_TAKEN' });
+    throw e;
+  }
+});
+app.put('/api/admin/providers/:id', requireAuth, requireAdmin, async (req, res) => {
+  const p = getProviderById(req.params.id);
+  if (!p) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  const b = sanitizeProviderBody(req.body || {});
+  const patch = {};
+  if (b.name !== undefined) {
+    if (!b.name) return res.status(400).json({ error: 'ERR_FIELDS_REQUIRED' });
+    patch.name = b.name;
+  }
+  if (b.type !== undefined) {
+    if (b.type !== 'openai' && b.type !== 'anthropic') return res.status(400).json({ error: 'ERR_BAD_TYPE' });
+    patch.type = b.type;
+  }
+  if (b.base_url !== undefined) {
+    if (!b.base_url) return res.status(400).json({ error: 'ERR_BASE_REQUIRED' });
+    const bad = await validateRouterBase(b.base_url);
+    if (bad) return res.status(400).json({ error: bad });
+    patch.base_url = b.base_url;
+  }
+  if (b.api_key !== undefined && b.api_key !== '') { // empty key = keep existing
+    if (b.api_key.length < 8) return res.status(400).json({ error: 'ERR_KEY_SHORT' });
+    if (b.api_key.length > 400) return res.status(400).json({ error: 'ERR_TOO_BIG' });
+    patch.api_key = b.api_key;
+  }
+  if (b.priority !== undefined && Number.isFinite(b.priority)) patch.priority = Math.round(b.priority);
+  const keys = Object.keys(patch);
+  if (!keys.length) return res.json({ ok: true, id: p.id });
+  patch.updated_at = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  try {
+    db.prepare('UPDATE providers SET ' + keys.map((k) => k + ' = ?').join(', ') + ' WHERE id = ?')
+      .run(...keys.map((k) => patch[k]), p.id);
+  } catch (e) {
+    if (String(e.message || '').includes('UNIQUE')) return res.status(400).json({ error: 'ERR_NAME_TAKEN' });
+    throw e;
+  }
+  const after = getProviderById(p.id);
+  if ((after && after.name.toLowerCase() === 'default') || String(p.name).toLowerCase() === 'default') syncLegacyFromDefault();
+  invalidateModelsCache();
+  audit(req.user, 'provider_edit', after ? after.name : String(p.id));
+  res.json({ ok: true, id: p.id });
+});
+app.delete('/api/admin/providers/:id', requireAuth, requireAdmin, (req, res) => {
+  const p = getProviderById(req.params.id);
+  if (!p) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  let enabledCount = 0;
+  try { enabledCount = db.prepare('SELECT COUNT(*) c FROM providers WHERE enabled = 1').get().c; } catch (_) { enabledCount = 0; }
+  if (p.enabled && enabledCount <= 1) return res.status(400).json({ error: 'ERR_LAST_PROVIDER' }); // refuse deleting the only enabled one
+  db.prepare('DELETE FROM providers WHERE id = ?').run(p.id);
+  invalidateModelsCache();
+  audit(req.user, 'provider_delete', p.name);
+  res.json({ ok: true });
+});
+app.patch('/api/admin/providers/:id/enabled', requireAuth, requireAdmin, (req, res) => {
+  const p = getProviderById(req.params.id);
+  if (!p) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  const on = !!((req.body || {}).enabled);
+  if (!on && p.enabled) {
+    let enabledCount = 0;
+    try { enabledCount = db.prepare('SELECT COUNT(*) c FROM providers WHERE enabled = 1').get().c; } catch (_) { enabledCount = 0; }
+    if (enabledCount <= 1) return res.status(400).json({ error: 'ERR_LAST_PROVIDER' }); // keep at least one live route
+  }
+  db.prepare("UPDATE providers SET enabled = ?, updated_at = datetime('now') WHERE id = ?").run(on ? 1 : 0, p.id);
+  invalidateModelsCache();
+  audit(req.user, on ? 'provider_enable' : 'provider_disable', p.name);
+  res.json({ ok: true, id: p.id, enabled: on ? 1 : 0 });
+});
+// per-provider connectivity probe: openai -> GET {base}/models,
+// anthropic -> GET {base}/v1/models (x-api-key), 404-fallback tiny /v1/messages max_tokens:1 auth check
+app.post('/api/admin/providers/:id/test', requireAuth, requireAdmin, async (req, res) => {
+  let p = getProviderById(req.params.id);
+  if (!p) return res.status(404).json({ error: 'ERR_NOT_FOUND' });
+  const override = sanitizeProviderBody(req.body || {});
+  if (override.base_url || override.api_key) {
+    if (override.base_url) {
+      const bad = await validateRouterBase(override.base_url);
+      if (bad) return res.status(400).json({ error: bad });
+      p = { ...p, base_url: override.base_url };
+    }
+    if (override.api_key) p = { ...p, api_key: override.api_key };
+  }
+  const t0 = Date.now();
+  const base = String(p.base_url || '').replace(/\/+$/, '');
+  if (!base || !p.api_key) return res.status(400).json({ error: 'ERR_ROUTER_NOT_CONFIGURED' });
+  try {
+    if (p.type === 'anthropic') {
+      let r = await fetch(base + '/v1/models', { headers: { 'x-api-key': p.api_key, 'anthropic-version': '2023-06-01' }, signal: AbortSignal.timeout(15000) });
+      if (r.ok) {
+        const data = await r.json().catch(() => null);
+        const arr = (data && (data.data || data.models)) || [];
+        const models = (Array.isArray(arr) ? arr : []).map((m) => (typeof m === 'string' ? m : (m.id || m.name || ''))).filter(Boolean).slice(0, 50);
+        return res.json({ ok: true, latency_ms: Date.now() - t0, model_count: models.length, models });
+      }
+      if (r.status !== 404) return res.json({ ok: false, status: r.status, latency_ms: Date.now() - t0, model_count: 0, models: [] });
+      // 404 on /v1/models (older endpoint set): tiny auth check via /v1/messages
+      r = await fetch(base + '/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': p.api_key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-3-5-haiku-latest', max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
+        signal: AbortSignal.timeout(15000)
+      });
+      const ms = Date.now() - t0;
+      if (r.ok) return res.json({ ok: true, latency_ms: ms, model_count: 0, models: [], note: 'auth-ok' });
+      if (r.status === 401 || r.status === 403) return res.json({ ok: false, status: r.status, latency_ms: ms, model_count: 0, models: [], error: 'ERR_BAD_KEY' });
+      return res.json({ ok: false, status: r.status, latency_ms: ms, model_count: 0, models: [] });
+    }
+    const r = await fetch(base + '/models', { headers: { 'Authorization': 'Bearer ' + p.api_key }, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return res.json({ ok: false, status: r.status, latency_ms: Date.now() - t0, model_count: 0, models: [] });
+    const data = await r.json().catch(() => null);
+    const arr = (data && data.data) || [];
+    const models = (Array.isArray(arr) ? arr : []).map((m) => m.id).filter(Boolean).slice(0, 50);
+    res.json({ ok: true, status: r.status, latency_ms: Date.now() - t0, model_count: models.length, models });
+  } catch (e) {
+    res.status(502).json({ error: (e && e.name === 'TimeoutError') ? 'ERR_TIMEOUT' : 'ERR_ROUTER_DOWN' });
+  }
 });
 
 // live connectivity probe: GET {base}/models with saved or posted (pre-save) credentials

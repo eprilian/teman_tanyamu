@@ -11,7 +11,7 @@
 | **Frontend** | `index.html` + `style.css` + `app.js`, zero framework, dark theme |
 | **Rich replies** | GPT/Gemini-grade Markdown via bundled `marked` + `DOMPurify` (tables, lists, code, blockquotes) |
 | **Language** | English (default) / Indonesian — runtime toggle |
-| **Version** | v1.0-beta.48 |
+| **Version** | v1.0-beta.49 |
 | **License** | Private / personal use |
 
 ---
@@ -148,6 +148,7 @@ How AI answers are turned into rich, ChatGPT/Gemini-style output:
 | Feature | Description |
 |---|---|
 | **Model Connection (gateway)** | Base URL + API key set in Admin Dashboard (Open WebUI style): masked key display, show/hide eye, Test button (live latency + model count), instant hot-reload, no restart |
+| **Multi-Provider endpoints** | Admin Dashboard → Providers: add any number of OpenAI (`/chat/completions`) or Anthropic (`/v1/messages`) endpoints with name/type/base URL/key + priority. Chat routing picks the highest-priority **enabled** provider whose name matches the model prefix (`prefix/name`), falling back to `Default`, then to the legacy settings. Anthropic SSE (`content_block_delta`) is converted to OpenAI chunks server-side, so streaming UI is unchanged. Per-row Test shows latency + model count; the last enabled provider cannot be disabled/deleted |
 | Auto-fetch | Model list pulled live from 9Router (or any OpenAI-compatible endpoint) |
 | **Searchable picker** | Custom combobox with instant filter + keyboard nav (↑/↓/Enter/Esc), works for admin & locked users |
 | Global default | Admin setting, applies to all users |
@@ -481,8 +482,14 @@ Errors return `{"error": "ERR_*"}` codes, translated client-side.
 | POST | `/api/admin/guest-purge-now` | - | Purge all guest data immediately |
 | GET | `/api/admin/settings` | - | Global settings + today's token totals (prompt/completion) |
 | PUT | `/api/admin/settings` | `{default_model?, history_token_budget?, max_reply_tokens?, context_window?, memory_enabled?, timeout_ms?, guest_enabled?, guest_max_chats?, guest_max_minutes?, guest_purge_hour?, gen_limit_max?, gen_limit_window_sec?}` | Update settings (budget 200–32000, reply cap 64–16384, fallback context window 1024–1048576, timeout 30–600 s, guest chats 1–200, guest minutes 1–60, purge hour 0–23, gen limit 5–1000 calls / 10–600 s window) |
-| GET | `/api/admin/router-config` | - | Model gateway base URL + masked key + source (`database`/`env`) |
-| PUT | `/api/admin/router-config` | `{base_url?, api_key?}` | Set gateway base URL & API key (hot-reload, no restart; empty key = keep) |
+| GET | `/api/admin/providers` | - | List providers (keys masked) |
+| POST | `/api/admin/providers` | `{name, type: openai\|anthropic, base_url, api_key, priority?}` | Add provider (SSRF-guarded URL, key ≥ 8 chars) |
+| PUT | `/api/admin/providers/:id` | `{name?, type?, base_url?, api_key? (empty = keep), priority?}` | Edit provider |
+| DELETE | `/api/admin/providers/:id` | - | Delete provider (refused if it is the last enabled one) |
+| PATCH | `/api/admin/providers/:id/enabled` | `{enabled: 0\|1}` | Enable / disable provider (same last-enabled guard) |
+| POST | `/api/admin/providers/:id/test` | `{base_url?, api_key?}` (optional pre-save override) | Probe endpoint → latency + model count (Anthropic uses `x-api-key` + `anthropic-version`, with a tiny `/v1/messages` auth fallback) |
+| GET | `/api/admin/router-config` | - | Legacy alias: reads provider `Default` (base URL + masked key + source) — old frontend + mobile safe |
+| PUT | `/api/admin/router-config` | `{base_url?, api_key?}` | Legacy alias: writes provider `Default` (mirrored both ways) |
 | POST | `/api/admin/router-test` | `{base_url?, api_key?}` | Probe `GET {base}/models` with saved **or** posted (pre-save) creds → latency + model count |
 | PUT | `/api/admin/wallpaper` | `{wallpaper\|null}` | Set global wallpaper |
 
@@ -538,6 +545,9 @@ chats     (id, user_id, title, model, lean, summary, summary_upto_id,
           -- pinned/archived: 0/1; tag: free text (<= 24 chars)
 messages  (id, chat_id, role, content, tokens, meta, created_at)
           -- meta: JSON reply-stats strip (time, tok/s, context %, prompt/completion/total tokens)
+providers (id, name UNIQUE, type openai|anthropic, base_url, api_key, enabled, priority, created_at, updated_at)
+          -- multi-provider endpoints; name 'Default' mirrors legacy router_base/router_key settings;
+          -- routing: highest-priority enabled provider whose name = model prefix, else Default, else legacy
 usage     (user_id, date, request_count, tokens_used, prompt_tokens, completion_tokens)  -- PK (user_id, date)
 usage_events (date, hour, mode, model, reqs, tok)      -- ledger: every AI call by (day, hour, mode, model); powers all admin charts
 shared_chats (token, chat_id, user_id, created_at)
@@ -750,7 +760,22 @@ Production-grade operational features:
 
 ## Changelog
 
-### v1.0-beta.48 (latest)
+### v1.0-beta.49 (latest)
+
+- **Multi-provider endpoints (OpenAI + Anthropic)** — Admin Dashboard → Providers: add any number of
+  OpenAI (`/chat/completions`) or Anthropic (`/v1/messages`) endpoints with name/type/base URL/key +
+  priority. Routing: highest-priority **enabled** provider whose name matches the model prefix
+  (`prefix/name`) wins, falling back to `Default`, then to the legacy single-gateway settings (100%
+  backward compatible — old single-provider setups keep working with no changes). Anthropic SSE
+  (`content_block_delta`/`text_delta`) is converted to OpenAI chunks server-side, so the streaming UI
+  is byte-identical (`data: {content|usage|partial|note|error}` + `data: [DONE]`). Per-row Test shows
+  latency + model count (Anthropic via `x-api-key` + `anthropic-version`, with a tiny `/v1/messages`
+  auth fallback). Guards: SSRF check on every new base URL, keys never logged (masked 6…4), cannot
+  disable/delete the last enabled provider.
+- **Legacy alias preserved** — `GET/PUT /api/admin/router-config` now reads/writes provider
+  `Default` (mirrored both ways), so the old frontend + mobile clients keep working.
+
+### v1.0-beta.48
 
 - **dsweb truncation fix (reasoning + finish reasons)** — `dsweb/deepseek-reasoner` THINK fragments no longer vanish: the relay forwards `reasoning_content` as a separate stream event, the UI shows it in a collapsible "thinking" block above the answer (never merged into the reply, stripped from copies), and it is stored in the DB as a `<think>…</think>` prefix so history survives reload. Honest stream ends: `finish=length` paints the ERR_LENGTH note, `finish=error` (cut upstream) paints a soft "partial reply" note instead of pretending success — on both `/api/chat` and `/api/temp-chat`.
 - **dsweb per-model reply cap** — `dsweb/*` gets `max_tokens` floor 8000 (128k-ctx/64k-out backend) instead of the global 4096, so long essays no longer cut off at the cap and get misfiled as a truncation bug. Other providers keep the admin setting untouched.

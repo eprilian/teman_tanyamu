@@ -136,6 +136,11 @@ function applyI18N() {
     setT('label[for="router-key"]', t('router_key_lbl'));
     setT('#router-test', t('router_test_btn'));
     setT('#router-save', t('router_save_btn'));
+    setT('#admin-providers-title', t('prov_title'));
+    setT('#admin-providers-sub', t('prov_sub'));
+    setT('#prov-add', t('prov_add'));
+    setT('#prov-save', t('prov_save'));
+    setT('#prov-cancel', t('prov_cancel'));
     if (routerCfg) {
       $('#router-key').placeholder = routerCfg.api_key_masked ? t('router_key_ph', routerCfg.api_key_masked) : t('router_key_ph_none');
       renderRouterStatus();
@@ -2242,6 +2247,146 @@ $('#router-test').addEventListener('click', async () => {
   }
 });
 
+// ---------- admin: multi-provider table (OpenAI + Anthropic endpoints) ----------
+let providersCache = [];
+let editingProviderId = null;
+function provResult(ok, text) {
+  const out = $('#provider-result');
+  if (!out) return;
+  out.hidden = false;
+  out.className = 'router-result' + (ok ? ' rr-ok' : ' rr-bad');
+  out.textContent = text;
+}
+async function loadProviders() {
+  const box = $('#admin-providers');
+  if (!box) return;
+  let list = [];
+  try {
+    const r = await fetch('/api/admin/providers');
+    if (r.ok) list = await r.json();
+  } catch (_) { /* keep stale */ }
+  providersCache = Array.isArray(list) ? list : [];
+  box.innerHTML = `
+  <table class="admin-table">
+    <thead><tr>
+      <th>${esc(t('prov_name'))}</th>
+      <th>${esc(t('prov_type'))}</th>
+      <th>${esc(t('prov_base'))}</th>
+      <th>${esc(t('prov_key'))}</th>
+      <th>${esc(t('prov_status'))}</th>
+      <th>${esc(t('prov_actions'))}</th>
+    </tr></thead>
+    <tbody>
+    ${providersCache.map((p) => `
+      <tr class="${p.enabled ? '' : 'inactive'}">
+        <td><strong>${esc(p.name)}</strong></td>
+        <td><span class="prov-type ${esc(p.type)}">${esc(p.type)}</span></td>
+        <td class="prov-base">${esc(p.base_url || '')}</td>
+        <td><code>${esc(p.api_key_masked || '****')}</code></td>
+        <td><button class="prov-toggle" role="switch" data-prov-toggle="${p.id}" aria-checked="${p.enabled ? 'true' : 'false'}" title="${esc(p.enabled ? t('prov_enabled') : t('prov_disabled'))}"><span class="knob"></span></button></td>
+        <td style="white-space:nowrap;">
+          <button class="btn-ghost row-btn" data-prov-test="${p.id}" style="padding:4px 10px; font-size:11.5px; border-radius:7px;">${esc(t('prov_test'))}</button>
+          <button class="btn-ghost row-btn" data-prov-edit="${p.id}" style="padding:4px 10px; font-size:11.5px; border-radius:7px;">${esc(t('prov_edit'))}</button>
+          <button class="btn-ghost row-btn" data-prov-del="${p.id}" data-prov-name="${esc(p.name)}" style="padding:4px 10px; font-size:11.5px; border-radius:7px;">${esc(t('prov_del'))}</button>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+function openProviderForm(id) {
+  editingProviderId = id || null;
+  const p = id ? providersCache.find((x) => String(x.id) === String(id)) : null;
+  $('#provider-form').hidden = false;
+  $('#prov-name').value = p ? p.name : '';
+  $('#prov-name').disabled = !!(p && String(p.name).toLowerCase() === 'default');
+  $('#prov-type').value = p ? p.type : 'openai';
+  $('#prov-base').value = p ? (p.base_url || '') : '';
+  $('#prov-key').value = '';
+  $('#prov-key').placeholder = p && p.api_key_masked ? t('router_key_ph', p.api_key_masked) : t('router_key_ph_none');
+  $('#prov-prio').value = p ? (p.priority || 0) : 0;
+  $('#prov-name').focus();
+}
+function closeProviderForm() {
+  editingProviderId = null;
+  $('#provider-form').hidden = true;
+}
+$('#prov-add').addEventListener('click', () => openProviderForm(null));
+$('#prov-cancel').addEventListener('click', closeProviderForm);
+$('#prov-save').addEventListener('click', async () => {
+  const body = {
+    name: $('#prov-name').value.trim(),
+    type: $('#prov-type').value,
+    base_url: $('#prov-base').value.trim(),
+    priority: Number($('#prov-prio').value || 0)
+  };
+  const key = $('#prov-key').value.trim();
+  if (key) body.api_key = key;
+  else if (!editingProviderId) body.api_key = '';
+  const url = editingProviderId ? `/api/admin/providers/${editingProviderId}` : '/api/admin/providers';
+  const method = editingProviderId ? 'PUT' : 'POST';
+  const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(terr(data.error) || data.error || 'Error', 'error'); return; }
+  closeProviderForm();
+  toast(t('prov_saved'), 'success');
+  await loadProviders();
+  await loadRouterConfig().catch(() => {});
+  allModelsCache = [];
+  loadAdminPanel().catch(() => {});
+});
+$('#admin-providers').addEventListener('click', async (e) => {
+  const tgl = e.target.closest('[data-prov-toggle]');
+  if (tgl) {
+    const id = tgl.dataset.provToggle;
+    const cur = tgl.getAttribute('aria-checked') === 'true';
+    const r = await fetch(`/api/admin/providers/${id}/enabled`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: cur ? 0 : 1 })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(terr(data.error) || data.error || 'Error', 'error'); return; }
+    await loadProviders();
+    allModelsCache = [];
+    return;
+  }
+  const tst = e.target.closest('[data-prov-test]');
+  if (tst) {
+    const id = tst.dataset.provTest;
+    tst.disabled = true;
+    const old = tst.textContent; tst.textContent = t('router_testing');
+    try {
+      const r = await fetch(`/api/admin/providers/${id}/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { provResult(false, terr(data.error) || data.error || 'Error'); }
+      else if (data.ok) {
+        provResult(true, data.note === 'auth-ok' ? `${t('prov_test_auth_ok')} · ${data.latency_ms} ms` : t('prov_test_ok', data.latency_ms, data.model_count));
+      } else { provResult(false, t('prov_test_bad', data.status)); }
+    } catch (err) { provResult(false, String(err.message || err)); }
+    finally { tst.disabled = false; tst.textContent = old; }
+    return;
+  }
+  const edt = e.target.closest('[data-prov-edit]');
+  if (edt) { openProviderForm(edt.dataset.provEdit); return; }
+  const del = e.target.closest('[data-prov-del]');
+  if (del) {
+    const id = del.dataset.provDel;
+    const nm = del.dataset.provName || ('#' + id);
+    openWarn({
+      title: t('prov_del') + ': ' + nm,
+      text: t('prov_confirm_del', nm),
+      okLabel: t('prov_del'),
+      onOk: async () => {
+        const r = await fetch(`/api/admin/providers/${id}`, { method: 'DELETE' });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { toast(terr(data.error) || data.error || 'Error', 'error'); return; }
+        toast(t('prov_deleted'), 'success');
+        await loadProviders();
+        await loadRouterConfig().catch(() => {});
+        allModelsCache = [];
+      }
+    });
+  }
+});
+
 const ADMIN_POLL_MS = 5000;
 setInterval(() => {
   if (!$('#modal-admin').classList.contains('active')) return;
@@ -2290,6 +2435,7 @@ async function loadAdminPanel() {
   loadAdminStats();
   renderAdminAI();
   await loadAdminUsers();
+  await loadProviders().catch(() => {});
 }
 
 async function loadAdminUsers() {
